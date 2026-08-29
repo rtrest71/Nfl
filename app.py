@@ -1,0 +1,681 @@
+#!/usr/bin/env python3
+"""Sleeper Draft Assistant - local server.
+
+    python3 app.py     ->   http://localhost:8000
+
+Standard library only: no pip install, no API keys, no accounts, nothing
+deployed anywhere. The browser talks to this server, and this server talks to
+Sleeper, which sidesteps the CORS problem a file:// page would hit.
+
+Everything degrades to cache. If Sleeper is unreachable at kickoff the app
+still boots off cache/players.json and you can drive it by hand.
+"""
+
+import argparse
+import json
+import os
+import threading
+import time
+import traceback
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import config
+import draftstate
+import projections as paste
+import sleeper
+import valuation
+
+
+class Assistant:
+    """All mutable draft state, behind one lock."""
+
+    def __init__(self, offline=False, slot_override=None):
+        self.lock = threading.RLock()
+        self.offline = offline
+        self.slot_override = slot_override
+
+        self.players = {}
+        self.index = None
+        self.projections = {}
+        self.adp = {}
+        self.scoring_settings = None
+        self.byes = {}
+
+        self.user = None
+        self.league = None
+        self.draft = None
+        self.league_users = {}
+        self.picks = []
+
+        self.board = []
+        self.board_round = None
+        self.snapshot = {}
+
+        self.manual_taken = []      # undo stack of manually marked players
+        self.warnings = []
+        self.errors = []
+        self.notes = []
+        self.last_poll = None
+        self.last_poll_ok = None
+        self.poll_failures = 0
+        self.running = True
+
+    # -- loading ----------------------------------------------------------
+
+    def log(self, message):
+        stamp = time.strftime("%H:%M:%S")
+        self.notes.append("%s  %s" % (stamp, message))
+        del self.notes[:-60]
+        print("[assistant] %s" % message)
+
+    def load_cached_data(self):
+        """Load whatever build_data.py left on disk. Never raises."""
+        with self.lock:
+            self.players = sleeper.cache_read(config.PLAYERS_CACHE, {}) or {}
+            cached_proj = sleeper.cache_read(config.PROJECTIONS_CACHE, {}) or {}
+            self.projections = cached_proj.get("players", cached_proj) or {}
+            cached_adp = sleeper.cache_read(config.ADP_CACHE, {}) or {}
+            self.adp = cached_adp.get("players", cached_adp) or {}
+            self.byes = cached_adp.get("byes", {}) or {}
+            league_cache = sleeper.cache_read(config.LEAGUE_CACHE, {}) or {}
+            self.league = league_cache.get("league")
+            self.draft = league_cache.get("draft")
+            self.user = league_cache.get("user")
+            self.league_users = league_cache.get("users") or {}
+            if self.league:
+                live = sleeper.live_scoring_settings(self.league)
+                if live:
+                    merged = dict(config.SCORING)
+                    merged.update(live)
+                    self.scoring_settings = merged
+
+            if self.players:
+                self.index = paste.PlayerIndex(self.players)
+                self.log("loaded %d players from cache" % len(self.players))
+            else:
+                self.errors.append(
+                    "No player database on disk. Run: python3 build_data.py")
+
+            if not self.projections:
+                self.warnings.append(
+                    "No projections loaded. Paste a projections table in the "
+                    "Data panel, or every player scores zero.")
+            if not self.adp:
+                self.warnings.append(
+                    "No pasted ADP. Falling back to Sleeper's own player ranking "
+                    "as an ADP estimate - paste real Sleeper ADP for sharper "
+                    "survival odds.")
+
+    def resolve_league(self):
+        """Resolve user -> league -> draft from the Sleeper API."""
+        if self.offline:
+            self.log("offline mode: skipping league resolution")
+            return
+        try:
+            user = sleeper.get_user()
+            leagues = sleeper.get_leagues(user["user_id"])
+            league = sleeper.pick_league(leagues)
+            if not league:
+                names = ", ".join(str(l.get("name")) for l in (leagues or []))
+                raise sleeper.SleeperError(
+                    "No league named %r for %s. Leagues found: %s"
+                    % (config.LEAGUE_NAME, config.USERNAME, names or "none"))
+
+            drafts = sleeper.get_drafts(league["league_id"])
+            draft = drafts[0] if drafts else None
+            users = {u["user_id"]: (u.get("display_name") or u.get("username"))
+                     for u in (sleeper.get_league_users(league["league_id"]) or [])}
+
+            with self.lock:
+                self.user, self.league, self.draft = user, league, draft
+                self.league_users = users
+                live = sleeper.live_scoring_settings(league)
+                if live:
+                    merged = dict(config.SCORING)
+                    merged.update(live)
+                    self.scoring_settings = merged
+                mismatches = sleeper.verify_league_settings(league)
+                for warning in mismatches:
+                    if warning not in self.warnings:
+                        self.warnings.append(warning)
+
+            sleeper.cache_write(config.LEAGUE_CACHE, {
+                "user": user, "league": league, "draft": draft, "users": users,
+                "fetched_at": time.time(),
+            })
+            self.log("league resolved: %s (draft %s, status %s)"
+                     % (league.get("name"),
+                        (draft or {}).get("draft_id"),
+                        (draft or {}).get("status")))
+        except sleeper.SleeperError as exc:
+            self.errors.append("Could not resolve league: %s" % exc)
+            self.log("league resolution failed: %s" % exc)
+
+    # -- polling ----------------------------------------------------------
+
+    def poll_once(self):
+        """One poll cycle: refresh the draft object and the picks list."""
+        if self.offline:
+            return
+        draft_id = (self.draft or {}).get("draft_id")
+        if not draft_id:
+            return
+
+        try:
+            # Re-read the draft object until the order is known; it is
+            # randomised at draft start, so this is how we learn our slot.
+            if not self._slot_known():
+                draft = sleeper.get_draft(draft_id)
+                if draft:
+                    with self.lock:
+                        previous = (self.draft or {}).get("status")
+                        self.draft = draft
+                        if draft.get("status") != previous:
+                            self.log("draft status: %s" % draft.get("status"))
+                        if self._slot_known():
+                            self.log("DRAFT SLOT DETECTED: %s" % self.my_slot())
+
+            picks = sleeper.get_picks(draft_id)
+            with self.lock:
+                before = len(self.picks)
+                self.picks = picks or []
+                self.last_poll = time.time()
+                self.last_poll_ok = True
+                self.poll_failures = 0
+                if len(self.picks) != before:
+                    self.log("picks: %d (was %d)" % (len(self.picks), before))
+        except sleeper.SleeperError as exc:
+            with self.lock:
+                self.last_poll = time.time()
+                self.last_poll_ok = False
+                self.poll_failures += 1
+                if self.poll_failures in (3, 10, 30):
+                    self.log("picks endpoint failing (%d in a row): %s"
+                             % (self.poll_failures, exc))
+
+    def poll_loop(self):
+        while self.running:
+            try:
+                self.poll_once()
+                self.recompute()
+            except Exception:  # noqa: BLE001 - the loop must never die
+                traceback.print_exc()
+            time.sleep(config.POLL_SECONDS)
+
+    # -- derived state ----------------------------------------------------
+
+    def my_slot(self):
+        if self.slot_override:
+            return int(self.slot_override)
+        user_id = (self.user or {}).get("user_id")
+        return draftstate.find_my_slot(self.draft, user_id)
+
+    def _slot_known(self):
+        return self.my_slot() is not None
+
+    def draft_shape(self):
+        draft = self.draft or {}
+        settings = draft.get("settings") or {}
+        return {
+            "teams": int(settings.get("teams") or config.TEAMS),
+            "rounds": int(settings.get("rounds") or config.ROUNDS),
+            "type": draft.get("type") or config.DRAFT_TYPE,
+            "reversal_round": int(settings.get("reversal_round") or 0),
+        }
+
+    def recompute(self):
+        """Rebuild the board and the recommendation from current picks."""
+        with self.lock:
+            if not self.players:
+                # No player database. Still hand the UI something so it can show
+                # the reason in red rather than spinning on "waiting for data".
+                self.snapshot = {
+                    "ok": False,
+                    "fatal": True,
+                    "errors": self.errors or [
+                        "No player database on disk. Run: python3 build_data.py"],
+                    "notes": self.notes[-12:],
+                    "generated_at": time.time(),
+                }
+                return
+
+            shape = self.draft_shape()
+            analysis = draftstate.analyze(
+                self.picks, self.players, shape["teams"], shape["type"],
+                shape["reversal_round"])
+
+            taken = set(analysis["taken"])
+            taken.update(p["player_id"] for p in self.manual_taken)
+
+            current_pick = analysis["pick_count"] + 1
+            total_picks = shape["teams"] * shape["rounds"]
+            current_pick = min(current_pick, total_picks)
+            current_round, on_clock_slot = draftstate.slot_of_pick(
+                current_pick, shape["teams"], shape["type"], shape["reversal_round"])
+
+            slot = self.my_slot()
+            if slot:
+                mine = draftstate.my_picks(slot, shape["teams"], shape["rounds"],
+                                           shape["type"], shape["reversal_round"])
+            else:
+                mine = []
+
+            remaining = [p for p in mine if p >= current_pick]
+            my_next_pick = remaining[1] if len(remaining) > 1 else None
+            on_the_clock = bool(slot and remaining and remaining[0] == current_pick)
+            picks_until_me = (remaining[0] - current_pick) if remaining else None
+
+            my_roster_players = analysis["roster_players"].get(slot, []) if slot else []
+            for player in my_roster_players:
+                full = self.players.get(player["player_id"]) or {}
+                player["bye"] = (self.projections.get(player["player_id"], {}).get("bye")
+                                 or self.byes.get(full.get("team")))
+            for player in self.manual_taken:
+                if player.get("mine"):
+                    my_roster_players.append(player)
+
+            # Rebuild the board when the round changes: the risk profile shifts
+            # from floor-weighted to upside-weighted at the crossover round.
+            if self.board_round != current_round or not self.board:
+                self.board = valuation.build_board(
+                    self.players, self.projections, self.adp,
+                    self.scoring_settings, current_round, self.byes)
+                self.board_round = current_round
+
+            slots_before = draftstate.slots_between(
+                current_pick, remaining[0] if remaining else None,
+                shape["teams"], shape["type"], shape["reversal_round"])
+            opp_needs = draftstate.opponent_needs(analysis["rosters"], slots_before)
+
+            my_positions = [p["position"] for p in my_roster_players]
+            needs = valuation.roster_needs(my_positions)
+            picks_left = len(remaining)
+
+            state = {
+                "taken": taken,
+                "round": current_round,
+                "current_pick": current_pick,
+                "my_next_pick": my_next_pick if my_next_pick else (
+                    remaining[1] if len(remaining) > 1 else None),
+                "picks_until_next": ((my_next_pick - current_pick)
+                                     if my_next_pick else None),
+                "my_roster": my_positions,
+                "my_remaining_picks": remaining,
+                "needs": needs,
+                "picks_left": max(picks_left, 1),
+                "opponent_needs": opp_needs,
+            }
+
+            recommendation = valuation.recommend(self.board, state)
+            queue = valuation.build_queue(self.board, state)
+
+            pool = [self._pool_entry(p, taken) for p in self.board[:320]]
+            board_grid = self._board_grid(analysis, shape)
+
+            self.snapshot = {
+                "ok": True,
+                "generated_at": time.time(),
+                "league": {
+                    "name": (self.league or {}).get("name"),
+                    "league_id": (self.league or {}).get("league_id"),
+                    "draft_id": (self.draft or {}).get("draft_id"),
+                    "status": (self.draft or {}).get("status") or "unknown",
+                    "teams": shape["teams"],
+                    "rounds": shape["rounds"],
+                    "type": shape["type"],
+                },
+                "me": {
+                    "username": config.USERNAME,
+                    "slot": slot,
+                    "slot_known": slot is not None,
+                    "my_picks": mine,
+                    "remaining_picks": remaining,
+                    "next_two": remaining[:2],
+                    "on_the_clock": on_the_clock,
+                    "picks_until_me": picks_until_me,
+                },
+                "draft": {
+                    "current_pick": current_pick,
+                    "round": current_round,
+                    "on_clock_slot": on_clock_slot,
+                    "on_clock_name": self._manager_name(on_clock_slot, analysis),
+                    "total_picks": total_picks,
+                    "picks_made": analysis["pick_count"],
+                },
+                "recommendation": self._serialise_recommendation(recommendation),
+                "roster": draftstate.roster_report(my_roster_players),
+                "roster_players": my_roster_players,
+                "warnings": (self.warnings
+                             + draftstate.imbalance_warnings(my_roster_players,
+                                                             picks_left)),
+                "bye_conflicts": draftstate.bye_conflicts(my_roster_players, self.byes),
+                "runs": draftstate.detect_run(analysis["history"]),
+                "cliffs": draftstate.tier_cliff_alerts(self.board, taken),
+                "value_board": [self._pool_entry(p, taken)
+                                for p in valuation.value_board(self.board, state)],
+                "queue": [{"name": p["name"], "position": p["position"],
+                           "team": p.get("team"), "player_id": p["player_id"]}
+                          for p in queue],
+                "pool": pool,
+                "board_grid": board_grid,
+                "opponent_needs": opp_needs,
+                "history": analysis["history"][-12:],
+                "manual_taken": self.manual_taken,
+                "errors": self.errors,
+                "notes": self.notes[-12:],
+                "data": {
+                    "players": len(self.players),
+                    "projections": len(self.projections),
+                    "adp": len(self.adp),
+                    "adp_is_estimate": not bool(self.adp),
+                    "scoring_source": ("live league settings"
+                                       if self.scoring_settings else "config.py"),
+                    "last_poll": self.last_poll,
+                    "last_poll_ok": self.last_poll_ok,
+                    "poll_failures": self.poll_failures,
+                    "offline": self.offline,
+                },
+            }
+
+    def _manager_name(self, slot, analysis):
+        if not slot:
+            return None
+        for user_id, user_slot in analysis["slot_by_user"].items():
+            if user_slot == slot:
+                return self.league_users.get(user_id, "Team %s" % slot)
+        order = (self.draft or {}).get("draft_order") or {}
+        for user_id, user_slot in order.items():
+            if int(user_slot) == int(slot):
+                return self.league_users.get(user_id, "Team %s" % slot)
+        return "Team %s" % slot
+
+    def _pool_entry(self, player, taken):
+        return {
+            "player_id": player["player_id"],
+            "name": player["name"],
+            "position": player["position"],
+            "team": player.get("team"),
+            "bye": player.get("bye"),
+            "points": player.get("points"),
+            "vor": player.get("vor"),
+            "adj_vor": player.get("adj_vor"),
+            "adp": player.get("adp"),
+            "adp_source": player.get("adp_source"),
+            "value_gap": player.get("value_gap"),
+            "tier": player.get("tier"),
+            "pos_label": player.get("pos_label"),
+            "injury_status": player.get("injury_status"),
+            "estimated": player.get("estimated"),
+            "drafted": player["player_id"] in taken,
+        }
+
+    def _serialise_recommendation(self, recommendation):
+        def entry(item):
+            player = item["player"]
+            return {
+                "player": self._pool_entry(player, set()),
+                "take_now": item["take_now"],
+                "wait": item["wait"],
+                "edge": item["edge"],
+                "p_survive": item["p_survive"],
+                "reason": item.get("reason", ""),
+                "tier_break": item.get("tier_break", False),
+                "next_tier_size": player.get("next_tier_size", 0),
+                "next_tier_drop": player.get("next_tier_drop", 0),
+                "cost_vs_top": item.get("cost_vs_top", 0),
+                "risk_reasons": player.get("risk_reasons", []),
+                "points_source": player.get("points_source"),
+            }
+
+        if not recommendation.get("top"):
+            return {"top": None, "alternatives": [], "delta_to_next": 0}
+        return {
+            "top": entry(recommendation["top"]),
+            "alternatives": [entry(a) for a in recommendation["alternatives"]],
+            "delta_to_next": recommendation.get("delta_to_next", 0),
+        }
+
+    def _board_grid(self, analysis, shape):
+        """One column per manager, every pick made, plus their positional needs."""
+        grid = []
+        for slot in range(1, shape["teams"] + 1):
+            roster = analysis["roster_players"].get(slot, [])
+            needs = valuation.roster_needs([p["position"] for p in roster])
+            grid.append({
+                "slot": slot,
+                "name": self._manager_name(slot, analysis),
+                "is_me": slot == self.my_slot(),
+                "picks": roster,
+                "needs": [pos for pos, n in needs.items() if n > 0 and pos != "FLEX"],
+                "counts": {pos: sum(1 for p in roster if p["position"] == pos)
+                           for pos in ("QB", "RB", "WR", "TE", "K", "DEF")},
+            })
+        return grid
+
+    # -- mutations --------------------------------------------------------
+
+    def mark_taken(self, player_id, mine=False):
+        with self.lock:
+            player = self.players.get(str(player_id))
+            if not player:
+                return False, "unknown player"
+            if any(p["player_id"] == str(player_id) for p in self.manual_taken):
+                return False, "already marked"
+            self.manual_taken.append({
+                "player_id": str(player_id),
+                "name": player.get("name"),
+                "position": player.get("position"),
+                "team": player.get("team"),
+                "mine": bool(mine),
+            })
+            self.log("manually marked %s%s" % (player.get("name"),
+                                               " (mine)" if mine else ""))
+        self.recompute()
+        return True, "ok"
+
+    def undo_manual(self):
+        with self.lock:
+            if not self.manual_taken:
+                return False, "nothing to undo"
+            removed = self.manual_taken.pop()
+            self.log("undid manual mark: %s" % removed.get("name"))
+        self.recompute()
+        return True, removed.get("name")
+
+    def load_projection_paste(self, text):
+        with self.lock:
+            if not self.players:
+                return {"error": "no player database loaded"}
+            parsed, report = paste.apply_projection_paste(text, self.players, self.index)
+            if not parsed:
+                return {"error": "nothing matched", "report": report}
+            self.projections.update(parsed)
+            sleeper.cache_write(config.PROJECTIONS_CACHE, {
+                "players": self.projections,
+                "source": "paste",
+                "updated_at": time.time(),
+            })
+            self.board_round = None  # force a rebuild
+            self.warnings = [w for w in self.warnings
+                             if not w.startswith("No projections")]
+            self.log("projections pasted: %d matched, %d unmatched"
+                     % (report["matched"], report["unmatched_count"]))
+        self.recompute()
+        return {"ok": True, "report": report}
+
+    def load_adp_paste(self, text):
+        with self.lock:
+            if not self.players:
+                return {"error": "no player database loaded"}
+            parsed, report = paste.apply_adp_paste(text, self.players, self.index)
+            if not parsed:
+                return {"error": "nothing matched", "report": report}
+            self.adp.update(parsed)
+            byes = {}
+            for pid, rec in parsed.items():
+                if rec.get("bye"):
+                    team = (self.players.get(pid) or {}).get("team")
+                    if team:
+                        byes[team] = rec["bye"]
+            self.byes.update(byes)
+            sleeper.cache_write(config.ADP_CACHE, {
+                "players": self.adp, "byes": self.byes,
+                "source": "paste", "updated_at": time.time(),
+            })
+            self.board_round = None
+            self.warnings = [w for w in self.warnings
+                             if not w.startswith("No pasted ADP")]
+            self.log("adp pasted: %d matched, %d unmatched"
+                     % (report["matched"], report["unmatched_count"]))
+        self.recompute()
+        return {"ok": True, "report": report}
+
+    def set_slot(self, slot):
+        with self.lock:
+            self.slot_override = int(slot) if slot else None
+            self.log("draft slot manually set to %s" % self.slot_override)
+        self.recompute()
+        return True
+
+
+# ---------------------------------------------------------------------------
+# HTTP layer
+# ---------------------------------------------------------------------------
+
+class Handler(BaseHTTPRequestHandler):
+    assistant = None
+    server_version = "DraftAssistant/1.0"
+
+    def log_message(self, fmt, *args):
+        pass  # the poll loop would otherwise flood the console
+
+    def _send(self, code, body, content_type="application/json"):
+        payload = body if isinstance(body, bytes) else str(body).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _json(self, data, code=200):
+        self._send(code, json.dumps(data, default=str))
+
+    def _body(self):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return {}
+        if not length:
+            return {}
+        raw = self.rfile.read(length)
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except ValueError:
+            return {"text": raw.decode("utf-8", "replace")}
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+        try:
+            if path in ("/", "/index.html"):
+                page = os.path.join(config.TEMPLATE_DIR, "index.html")
+                with open(page, "rb") as fh:
+                    return self._send(200, fh.read(), "text/html; charset=utf-8")
+            if path == "/api/state":
+                with self.assistant.lock:
+                    snapshot = self.assistant.snapshot
+                if not snapshot:
+                    self.assistant.recompute()
+                    with self.assistant.lock:
+                        snapshot = self.assistant.snapshot
+                return self._json(snapshot or {"ok": False, "error": "no data yet"})
+            if path == "/api/health":
+                return self._json({"ok": True, "time": time.time()})
+            return self._json({"error": "not found"}, 404)
+        except FileNotFoundError:
+            return self._json({"error": "templates/index.html is missing"}, 500)
+        except Exception as exc:  # noqa: BLE001 - never 500 silently mid-draft
+            traceback.print_exc()
+            return self._json({"error": str(exc)}, 500)
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        try:
+            body = self._body()
+            if path == "/api/paste/projections":
+                return self._json(
+                    self.assistant.load_projection_paste(body.get("text", "")))
+            if path == "/api/paste/adp":
+                return self._json(self.assistant.load_adp_paste(body.get("text", "")))
+            if path == "/api/mark":
+                ok, detail = self.assistant.mark_taken(
+                    body.get("player_id"), body.get("mine", False))
+                return self._json({"ok": ok, "detail": detail})
+            if path == "/api/undo":
+                ok, detail = self.assistant.undo_manual()
+                return self._json({"ok": ok, "detail": detail})
+            if path == "/api/slot":
+                self.assistant.set_slot(body.get("slot"))
+                return self._json({"ok": True})
+            if path == "/api/refresh":
+                self.assistant.resolve_league()
+                self.assistant.poll_once()
+                self.assistant.recompute()
+                return self._json({"ok": True})
+            return self._json({"error": "not found"}, 404)
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            return self._json({"error": str(exc)}, 500)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Sleeper Draft Assistant")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--offline", action="store_true",
+                        help="Do not call Sleeper; run entirely off cache.")
+    parser.add_argument("--slot", type=int, default=None,
+                        help="Force your draft slot (1-12) if auto-detection fails.")
+    parser.add_argument("--no-browser", action="store_true")
+    args = parser.parse_args()
+
+    assistant = Assistant(offline=args.offline, slot_override=args.slot)
+    assistant.load_cached_data()
+    assistant.resolve_league()
+    assistant.poll_once()
+    assistant.recompute()
+
+    Handler.assistant = assistant
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+
+    poller = threading.Thread(target=assistant.poll_loop, daemon=True)
+    poller.start()
+
+    url = "http://localhost:%d" % args.port
+    print("\n  Sleeper Draft Assistant")
+    print("  %s" % url)
+    print("  players=%d projections=%d adp=%d"
+          % (len(assistant.players), len(assistant.projections), len(assistant.adp)))
+    if assistant.errors:
+        print("\n  PROBLEMS:")
+        for err in assistant.errors:
+            print("   - %s" % err)
+    print("\n  Ctrl-C to stop.\n")
+
+    if not args.no_browser:
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n  stopping")
+    finally:
+        assistant.running = False
+        server.server_close()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draft Assistant</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b23; --panel2:#1c222c; --line:#2a323f;
+    --ink:#e8edf4; --dim:#8b97a8; --accent:#4da3ff;
+    --good:#25c26e; --warn:#f0a92a; --bad:#f2534d;
+    --qb:#c77dff; --rb:#4ade80; --wr:#60a5fa; --te:#fbbf24; --k:#94a3b8; --def:#f472b6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  h2{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+     margin:0 0 10px}
+  .wrap{max-width:1600px;margin:0 auto;padding:14px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+         padding:14px;margin-bottom:14px}
+  .row{display:flex;gap:14px;align-items:flex-start}
+  .col{flex:1;min-width:0}
+  .muted{color:var(--dim)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  button{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+         border-radius:6px;padding:6px 11px;cursor:pointer;font-size:13px}
+  button:hover{border-color:var(--accent)}
+  textarea{width:100%;min-height:110px;background:#0b0e13;color:var(--ink);
+           border:1px solid var(--line);border-radius:6px;padding:9px;
+           font-family:ui-monospace,monospace;font-size:12px}
+  input,select{background:#0b0e13;color:var(--ink);border:1px solid var(--line);
+               border-radius:6px;padding:6px 9px;font-size:13px}
+
+  /* ---- header ---- */
+  header{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+         padding:16px 18px;margin-bottom:14px;
+         display:flex;align-items:center;gap:26px;flex-wrap:wrap}
+  .clock{flex:1;min-width:320px}
+  .clock .label{font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+                color:var(--dim)}
+  .clock .big{font-size:62px;font-weight:800;line-height:1.02;letter-spacing:-.02em}
+  .clock.far .big{color:var(--good)}
+  .clock.soon .big{color:var(--warn)}
+  .clock.now .big{color:var(--bad);animation:flash .85s infinite}
+  @keyframes flash{0%,100%{opacity:1}50%{opacity:.32}}
+  .stat{min-width:100px}
+  .stat .k{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .stat .v{font-size:26px;font-weight:700}
+  .slotbig{font-size:46px;font-weight:800;color:var(--accent)}
+
+  /* ---- alerts ---- */
+  .alert{border-radius:8px;padding:9px 13px;margin-bottom:8px;font-weight:600;
+         border-left:4px solid}
+  .alert.bad{background:#3a1a1a;border-color:var(--bad)}
+  .alert.warn{background:#3a2f14;border-color:var(--warn)}
+  .alert.info{background:#12283d;border-color:var(--accent)}
+
+  /* ---- recommendation ---- */
+  .rec{border:2px solid var(--good);border-radius:12px;padding:18px;
+       background:linear-gradient(180deg,#16241c,#161b23)}
+  .rec .name{font-size:40px;font-weight:800;line-height:1.05;letter-spacing:-.02em}
+  .rec .sub{color:var(--dim);margin-top:4px;font-size:15px}
+  .rec .why{font-size:17px;line-height:1.5;margin:14px 0 0;
+            background:#0d1218;border-radius:8px;padding:13px 15px}
+  .nums{display:flex;gap:22px;margin-top:14px;flex-wrap:wrap}
+  .nums div{min-width:78px}
+  .nums .k{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .nums .v{font-size:20px;font-weight:700}
+  .alts{margin-top:12px}
+  .alt{display:flex;gap:12px;align-items:baseline;padding:9px 11px;
+       border:1px solid var(--line);border-radius:8px;margin-bottom:7px;
+       background:var(--panel2)}
+  .alt .an{font-weight:700;font-size:16px;min-width:190px}
+  .alt .ar{color:var(--dim);font-size:13px;flex:1}
+  .cost{color:var(--warn);font-weight:700;white-space:nowrap;font-size:13px}
+
+  .pos{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;
+       font-weight:800;color:#0b0e13}
+  .pos.QB{background:var(--qb)} .pos.RB{background:var(--rb)}
+  .pos.WR{background:var(--wr)} .pos.TE{background:var(--te)}
+  .pos.K{background:var(--k)}   .pos.DEF{background:var(--def)}
+
+  /* ---- roster ---- */
+  .slots{display:flex;flex-wrap:wrap;gap:6px}
+  .slotchip{padding:5px 9px;border-radius:6px;border:1px solid var(--line);
+            font-size:12px;font-weight:700}
+  .slotchip.empty{color:var(--bad);border-color:var(--bad);border-style:dashed}
+  .slotchip.filled{color:var(--good);border-color:#1f4d35;background:#132a1e}
+
+  /* ---- tables ---- */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:var(--dim);font-size:11px;text-transform:uppercase;
+     letter-spacing:.07em;padding:6px 8px;border-bottom:1px solid var(--line);
+     cursor:pointer;user-select:none;position:sticky;top:0;background:var(--panel)}
+  td{padding:5px 8px;border-bottom:1px solid #1e242e}
+  tr.gone td{opacity:.32;text-decoration:line-through}
+  tr:hover td{background:#1a2029}
+  .scroll{max-height:440px;overflow:auto}
+
+  /* ---- draft board ---- */
+  .grid{display:grid;gap:6px;overflow-x:auto;
+        grid-template-columns:repeat(var(--cols,12),minmax(112px,1fr))}
+  .team{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+        padding:7px}
+  .team.me{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+  .team h4{margin:0 0 5px;font-size:12px;overflow:hidden;text-overflow:ellipsis;
+           white-space:nowrap}
+  .team .need{font-size:10px;color:var(--warn);margin-bottom:4px;font-weight:700}
+  .team .p{font-size:11px;padding:2px 0;border-top:1px solid #232a35;
+           overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .badge{font-size:10px;padding:1px 5px;border-radius:3px;background:#233;
+         color:var(--dim);margin-left:5px}
+  .tag{font-size:10px;font-weight:800;color:var(--bad)}
+  details summary{cursor:pointer;color:var(--dim);font-size:12px;
+                  text-transform:uppercase;letter-spacing:.08em}
+  .flex{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+  .err{color:var(--bad);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="clock" id="clock">
+      <div class="label">Your pick in</div>
+      <div class="big" id="untilMe">--</div>
+      <div class="muted" id="nextPicks">waiting for the draft to start</div>
+    </div>
+    <div class="stat"><div class="k">Round</div><div class="v" id="round">-</div></div>
+    <div class="stat"><div class="k">Pick</div><div class="v" id="pick">-</div></div>
+    <div class="stat"><div class="k">On the clock</div>
+      <div class="v" id="onClock" style="font-size:17px">-</div></div>
+    <div class="stat"><div class="k">Your slot</div>
+      <div class="slotbig" id="slot">?</div></div>
+    <div class="stat"><div class="k">Status</div>
+      <div class="v" id="status" style="font-size:15px">-</div></div>
+  </header>
+
+  <div id="alerts"></div>
+
+  <div class="row">
+    <div class="col" style="flex:2.1">
+      <div class="panel">
+        <h2>Take this player</h2>
+        <div id="rec"><div class="muted">Waiting for data…</div></div>
+      </div>
+
+      <div class="panel">
+        <h2>Draft board — all <span id="teamCount">12</span> teams</h2>
+        <div class="grid" id="grid"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Player pool</h2>
+        <div class="flex" style="margin-bottom:9px">
+          <select id="fPos">
+            <option value="">All positions</option>
+            <option>QB</option><option>RB</option><option>WR</option>
+            <option>TE</option><option>K</option><option>DEF</option>
+          </select>
+          <input id="fName" placeholder="search name" style="width:170px">
+          <label class="muted"><input type="checkbox" id="fAvail" checked>
+            hide drafted</label>
+          <span class="muted" id="poolCount"></span>
+        </div>
+        <div class="scroll">
+          <table id="pool">
+            <thead><tr>
+              <th data-k="overall">#</th><th data-k="name">Player</th>
+              <th data-k="position">Pos</th><th data-k="team">Tm</th>
+              <th data-k="bye">Bye</th><th data-k="points">Proj</th>
+              <th data-k="vor">VOR</th><th data-k="adp">ADP</th>
+              <th data-k="value_gap">Gap</th><th data-k="tier">Tier</th><th></th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="col" style="flex:1;min-width:340px">
+      <div class="panel">
+        <h2>My roster</h2>
+        <div class="slots" id="slots"></div>
+        <div id="needs" style="margin-top:11px"></div>
+        <div class="scroll" style="max-height:230px;margin-top:11px">
+          <table id="myRoster"><tbody></tbody></table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Value board — market is sleeping on these</h2>
+        <div class="scroll" style="max-height:280px">
+          <table id="valueBoard"><tbody></tbody></table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Queue export — paste into Sleeper</h2>
+        <p class="muted" style="margin:0 0 8px;font-size:12px">
+          Insurance. If your wifi drops or the clock runs out, Sleeper autopicks
+          from your queue instead of grabbing something random.</p>
+        <textarea id="queue" readonly></textarea>
+        <div class="flex" style="margin-top:8px">
+          <button onclick="copyQueue()">Copy queue</button>
+          <span class="muted" id="queueNote"></span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Data &amp; manual controls</h2>
+        <div id="dataStatus" class="muted" style="font-size:12px;margin-bottom:10px"></div>
+
+        <details>
+          <summary>Paste projections</summary>
+          <p class="muted" style="font-size:12px">
+            Any table from FantasyPros, ESPN or Yahoo. Any column order. Points are
+            recomputed from raw stats using your league's exact scoring.</p>
+          <textarea id="projText" placeholder="Player,Team,POS,PASS YDS,PASS TD,RUSH YDS,REC,REC YDS,REC TD…"></textarea>
+          <div class="flex" style="margin-top:7px">
+            <button onclick="sendPaste('projections')">Load projections</button>
+            <span id="projMsg" class="muted"></span>
+          </div>
+        </details>
+
+        <details style="margin-top:10px">
+          <summary>Paste Sleeper ADP</summary>
+          <p class="muted" style="font-size:12px">
+            Must be <b>Sleeper</b> ADP, not ESPN or Yahoo — Sleeper drafters draft
+            off Sleeper's rankings, and wrong ADP means wrong survival odds.</p>
+          <textarea id="adpText" placeholder="1. Ja'Marr Chase CIN 1.2 …  or  Rank,Player,Team,POS,ADP"></textarea>
+          <div class="flex" style="margin-top:7px">
+            <button onclick="sendPaste('adp')">Load ADP</button>
+            <span id="adpMsg" class="muted"></span>
+          </div>
+        </details>
+
+        <details style="margin-top:10px">
+          <summary>Manual override</summary>
+          <p class="muted" style="font-size:12px">
+            If the live picks feed stalls, mark players taken by hand here.</p>
+          <div class="flex" style="margin-top:7px">
+            <input id="markName" placeholder="player name" style="width:160px">
+            <button onclick="markTaken(false)">Mark taken</button>
+            <button onclick="markTaken(true)">Taken by me</button>
+            <button onclick="undoMark()">Undo</button>
+          </div>
+          <div id="markMsg" class="muted" style="margin-top:6px"></div>
+          <div class="flex" style="margin-top:10px">
+            <span class="muted">Force draft slot:</span>
+            <input id="slotInput" type="number" min="1" max="12" style="width:64px">
+            <button onclick="setSlot()">Set</button>
+          </div>
+        </details>
+
+        <details style="margin-top:10px">
+          <summary>Activity log</summary>
+          <div id="log" class="mono muted" style="font-size:11px;margin-top:7px"></div>
+        </details>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let STATE = null;
+let sortKey = "overall", sortDir = 1;
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const num = (v, d = 1) => (v === null || v === undefined) ? "-" : Number(v).toFixed(d);
+const posTag = (p) => `<span class="pos ${esc(p)}">${esc(p)}</span>`;
+
+async function poll() {
+  try {
+    const res = await fetch("/api/state", {cache: "no-store"});
+    const data = await res.json();
+    if (data && data.ok === false) {
+      // Never spin silently on "waiting for data" - say what is wrong.
+      $("alerts").innerHTML = (data.errors || ["The app has no data loaded."])
+        .map(e => `<div class="alert bad">${esc(e)}</div>`).join("") +
+        `<div class="alert warn">Run <b>python3 build_data.py</b> in the project
+         folder, then reload this page.</div>`;
+      $("status").textContent = "no data";
+      return;
+    }
+    if (data) { STATE = data; render(); }
+    $("status").textContent = (data.league && data.league.status) || "-";
+  } catch (err) {
+    $("status").textContent = "server down";
+  }
+}
+
+function render() {
+  const s = STATE;
+  renderHeader(s);
+  renderAlerts(s);
+  renderRec(s);
+  renderRoster(s);
+  renderValueBoard(s);
+  renderQueue(s);
+  renderGrid(s);
+  renderPool(s);
+  renderData(s);
+}
+
+function renderHeader(s) {
+  const me = s.me, d = s.draft;
+  $("round").textContent = d.round;
+  $("pick").textContent = d.current_pick + " / " + d.total_picks;
+  $("onClock").textContent = d.on_clock_name || ("Team " + (d.on_clock_slot || "?"));
+  $("slot").textContent = me.slot_known ? me.slot : "?";
+
+  const clock = $("clock");
+  const until = me.picks_until_me;
+  if (!me.slot_known) {
+    $("untilMe").textContent = "--";
+    $("nextPicks").textContent =
+      "Draft order not set yet. Your slot appears here the moment Sleeper randomises it.";
+    clock.className = "clock";
+  } else if (me.on_the_clock) {
+    $("untilMe").textContent = "YOU'RE UP";
+    clock.className = "clock now";
+    $("nextPicks").textContent = "Pick " + d.current_pick + " is yours. Make it.";
+  } else if (until === null || until === undefined) {
+    $("untilMe").textContent = "DONE";
+    clock.className = "clock";
+    $("nextPicks").textContent = "No picks left.";
+  } else {
+    $("untilMe").textContent = until;
+    clock.className = "clock " + (until >= 3 ? "far" : "soon");
+    const nxt = me.remaining_picks.slice(0, 3).join(", ");
+    $("nextPicks").textContent = "Your next picks: " + (nxt || "-");
+  }
+}
+
+function renderAlerts(s) {
+  const out = [];
+  (s.errors || []).forEach(e => out.push(`<div class="alert bad">${esc(e)}</div>`));
+  (s.runs || []).forEach(r => out.push(
+    `<div class="alert warn">${esc(r.position)} RUN — ${r.count} taken in the last ${r.window} picks.</div>`));
+  (s.cliffs || []).forEach(c => out.push(
+    `<div class="alert warn">${esc(c.message)}</div>`));
+  (s.warnings || []).forEach(w => out.push(`<div class="alert info">${esc(w)}</div>`));
+  (s.bye_conflicts || []).forEach(b => out.push(
+    `<div class="alert info">${esc(b.message)}</div>`));
+  if (s.data && s.data.poll_failures >= 3) out.push(
+    `<div class="alert bad">Live pick feed has failed ${s.data.poll_failures} times in a row.
+     Use Manual override to mark picks by hand.</div>`);
+  $("alerts").innerHTML = out.join("");
+}
+
+function renderRec(s) {
+  const r = s.recommendation;
+  if (!r || !r.top) {
+    $("rec").innerHTML = `<div class="muted">No eligible player. Check that
+      projections are loaded in the Data panel.</div>`;
+    return;
+  }
+  const t = r.top, p = t.player;
+  const survive = t.p_survive === null ? null : Math.round(t.p_survive * 100);
+
+  let html = `<div class="rec">
+    <div class="name">${esc(p.name)}</div>
+    <div class="sub">${posTag(p.position)} &nbsp;${esc(p.team || "")}
+      ${p.bye ? " · bye week " + p.bye : ""}
+      ${p.pos_label ? " · " + esc(p.pos_label) : ""}
+      ${p.estimated ? ' · <span class="tag">ESTIMATED</span>' : ""}
+      ${p.injury_status ? ' · <span class="tag">' + esc(p.injury_status) + "</span>" : ""}
+    </div>`;
+
+  if (t.tier_break) html += `<div class="alert warn" style="margin-top:12px">
+    TIER BREAK — he is the last of his group. The next ${t.next_tier_size}
+    ${esc(p.position)}s are about ${num(t.next_tier_drop, 0)} points worse.</div>`;
+
+  html += `<div class="why">${esc(t.reason)}</div>
+    <div class="nums">
+      <div><div class="k">Projected</div><div class="v">${num(p.points, 0)}</div></div>
+      <div><div class="k">Value over replacement</div><div class="v">${num(p.vor, 1)}</div></div>
+      <div><div class="k">ADP</div><div class="v">${num(p.adp, 1)}</div></div>
+      <div><div class="k">Survives to next pick</div>
+        <div class="v">${survive === null ? "-" : survive + "%"}</div></div>
+      <div><div class="k">Edge over waiting</div><div class="v">${num(t.edge, 1)}</div></div>
+    </div></div>`;
+
+  if (r.alternatives && r.alternatives.length) {
+    html += `<div class="alts"><h2 style="margin:16px 0 8px">If you disagree</h2>`;
+    r.alternatives.forEach(a => {
+      html += `<div class="alt">
+        <div class="an">${posTag(a.player.position)} ${esc(a.player.name)}
+          <span class="badge">${esc(a.player.team || "")}</span></div>
+        <div class="ar">${esc(a.reason)}</div>
+        <div class="cost">costs ${num(a.cost_vs_top, 1)} pts</div></div>`;
+    });
+    html += `</div>`;
+  }
+  $("rec").innerHTML = html;
+}
+
+function renderRoster(s) {
+  const r = s.roster;
+  $("slots").innerHTML = (r.slots || []).map(sl =>
+    `<div class="slotchip ${sl.filled ? "filled" : "empty"}">${esc(sl.slot)}</div>`
+  ).join("");
+
+  const needs = (r.ranked_needs || []).filter(n => n.position !== "FLEX" || n.count);
+  $("needs").innerHTML = needs.length
+    ? `<span class="muted">Still need:</span> ` + needs.map(n =>
+        `<b>${esc(n.position)}${n.count > 1 ? " x" + n.count : ""}</b>`).join(", ")
+    : `<span class="muted">Every starting slot is filled.</span>`;
+
+  $("myRoster").querySelector("tbody").innerHTML =
+    (s.roster_players || []).map(p =>
+      `<tr><td>${posTag(p.position)}</td><td>${esc(p.name)}</td>
+       <td class="muted">${esc(p.team || "")}</td>
+       <td class="muted">${p.pick_no ? "#" + p.pick_no : "manual"}</td></tr>`
+    ).join("") || `<tr><td class="muted">No picks yet.</td></tr>`;
+}
+
+function renderValueBoard(s) {
+  $("valueBoard").querySelector("tbody").innerHTML =
+    (s.value_board || []).map(p =>
+      `<tr><td>${posTag(p.position)}</td><td>${esc(p.name)}</td>
+       <td class="muted">${esc(p.team || "")}</td>
+       <td style="color:var(--good);font-weight:700">+${p.value_gap}</td>
+       <td class="muted">${num(p.points, 0)} pts</td></tr>`
+    ).join("") || `<tr><td class="muted">Load projections and ADP to fill this.</td></tr>`;
+}
+
+function renderQueue(s) {
+  const q = s.queue || [];
+  $("queue").value = q.map((p, i) =>
+    `${i + 1}. ${p.name} (${p.position}${p.team ? " - " + p.team : ""})`).join("\n");
+  $("queueNote").textContent = q.length + " players, regenerated every poll";
+}
+
+function renderGrid(s) {
+  const g = s.board_grid || [];
+  $("teamCount").textContent = g.length;
+  const el = $("grid");
+  el.style.setProperty("--cols", g.length || 12);
+  el.innerHTML = g.map(t => `
+    <div class="team ${t.is_me ? "me" : ""}">
+      <h4>${t.is_me ? "★ " : ""}${esc(t.name || "Team " + t.slot)}</h4>
+      <div class="need">${t.needs.length ? "needs " + t.needs.join(" ") : "starters set"}</div>
+      ${t.picks.map(p => `<div class="p">${posTag(p.position)} ${esc(p.name)}</div>`).join("")}
+    </div>`).join("");
+}
+
+function renderPool(s) {
+  const fPos = $("fPos").value, fName = $("fName").value.toLowerCase().trim();
+  const hide = $("fAvail").checked;
+  let rows = (s.pool || []).filter(p =>
+    (!fPos || p.position === fPos) &&
+    (!fName || p.name.toLowerCase().includes(fName)) &&
+    (!hide || !p.drafted));
+
+  rows.sort((a, b) => {
+    if (sortKey === "overall") return 0;
+    let x = a[sortKey], y = b[sortKey];
+    if (x === null || x === undefined) x = sortDir > 0 ? Infinity : -Infinity;
+    if (y === null || y === undefined) y = sortDir > 0 ? Infinity : -Infinity;
+    if (typeof x === "string") return sortDir * x.localeCompare(y);
+    return sortDir * (x - y);
+  });
+
+  $("poolCount").textContent = rows.length + " shown";
+  $("pool").querySelector("tbody").innerHTML = rows.slice(0, 260).map((p, i) => `
+    <tr class="${p.drafted ? "gone" : ""}">
+      <td class="muted">${i + 1}</td>
+      <td><b>${esc(p.name)}</b>${p.estimated ? ' <span class="tag">EST</span>' : ""}
+        ${p.injury_status ? ' <span class="tag">' + esc(p.injury_status) + "</span>" : ""}</td>
+      <td>${posTag(p.position)}</td><td class="muted">${esc(p.team || "")}</td>
+      <td class="muted">${p.bye || "-"}</td>
+      <td>${num(p.points, 0)}</td><td>${num(p.vor, 1)}</td>
+      <td class="muted">${num(p.adp, 1)}</td>
+      <td style="color:${p.value_gap > 0 ? "var(--good)" : "var(--dim)"}">
+        ${p.value_gap > 0 ? "+" : ""}${p.value_gap}</td>
+      <td class="muted">${p.tier || "-"}</td>
+      <td>${p.drafted ? "" :
+        `<button onclick="markById('${p.player_id}')">taken</button>`}</td>
+    </tr>`).join("");
+}
+
+function renderData(s) {
+  const d = s.data || {};
+  const age = d.last_poll ? Math.round(Date.now() / 1000 - d.last_poll) : null;
+  $("dataStatus").innerHTML = `
+    ${d.players} players · ${d.projections} projections · ${d.adp} ADP
+    ${d.adp_is_estimate ? '<span class="tag">ADP ESTIMATED</span>' : ""}<br>
+    scoring from ${esc(d.scoring_source)} ·
+    feed ${d.offline ? "offline mode" :
+      (d.last_poll_ok ? "ok" : '<span class="err">failing</span>')}
+    ${age !== null ? " (" + age + "s ago)" : ""}`;
+  $("log").innerHTML = (s.notes || []).slice().reverse().map(esc).join("<br>");
+}
+
+/* ---- actions ---- */
+async function post(url, body) {
+  const res = await fetch(url, {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body || {})
+  });
+  return res.json();
+}
+
+async function sendPaste(kind) {
+  const box = kind === "adp" ? $("adpText") : $("projText");
+  const msg = kind === "adp" ? $("adpMsg") : $("projMsg");
+  msg.textContent = "loading…";
+  const out = await post("/api/paste/" + kind, {text: box.value});
+  if (out.error) {
+    msg.innerHTML = `<span class="err">${esc(out.error)}</span>`;
+  } else {
+    const r = out.report;
+    msg.textContent = `matched ${r.matched} of ${r.parsed}` +
+      (r.unmatched_count ? ` (${r.unmatched_count} unmatched)` : "");
+  }
+  poll();
+}
+
+async function markById(pid) { await post("/api/mark", {player_id: pid}); poll(); }
+
+async function markTaken(mine) {
+  const name = $("markName").value.trim();
+  if (!name) return;
+  const hit = (STATE.pool || []).find(p =>
+    !p.drafted && p.name.toLowerCase().includes(name.toLowerCase()));
+  if (!hit) { $("markMsg").innerHTML = `<span class="err">no match</span>`; return; }
+  await post("/api/mark", {player_id: hit.player_id, mine: mine});
+  $("markMsg").textContent = "marked " + hit.name;
+  $("markName").value = "";
+  poll();
+}
+
+async function undoMark() {
+  const out = await post("/api/undo", {});
+  $("markMsg").textContent = out.ok ? "undid " + out.detail : out.detail;
+  poll();
+}
+
+async function setSlot() {
+  await post("/api/slot", {slot: Number($("slotInput").value) || null});
+  poll();
+}
+
+function copyQueue() {
+  $("queue").select();
+  document.execCommand("copy");
+  $("queueNote").textContent = "copied";
+}
+
+/* ---- wiring ---- */
+document.querySelectorAll("#pool th[data-k]").forEach(th => {
+  th.onclick = () => {
+    const k = th.dataset.k;
+    sortDir = (sortKey === k) ? -sortDir : (["name", "team", "position"].includes(k) ? 1 : -1);
+    sortKey = k;
+    if (STATE) renderPool(STATE);
+  };
+});
+["fPos", "fName", "fAvail"].forEach(id =>
+  $(id).addEventListener("input", () => { if (STATE) renderPool(STATE); }));
+
+poll();
+setInterval(poll, 2000);
+</script>
+</body>
+</html>
