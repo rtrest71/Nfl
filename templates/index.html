@@ -147,6 +147,24 @@
       </div>
 
       <div class="panel">
+        <h2>What if? — play the rest of the draft out</h2>
+        <p class="muted" style="margin:0 0 10px;font-size:12px">
+          Simulates the remaining rounds hundreds of times for each candidate and
+          reports your projected <b>starting lineup</b> total. Every candidate
+          faces the same simulated drafts, so the comparison is like for like.</p>
+        <div class="flex" style="margin-bottom:10px">
+          <button onclick="runSim()" id="simBtn">Run 500 drafts</button>
+          <select id="simRuns">
+            <option value="200">200 runs (faster)</option>
+            <option value="500" selected>500 runs</option>
+            <option value="1000">1000 runs (sharper)</option>
+          </select>
+          <span class="muted" id="simStatus"></span>
+        </div>
+        <div id="simOut"></div>
+      </div>
+
+      <div class="panel">
         <h2>Draft board — all <span id="teamCount">12</span> teams</h2>
         <div class="grid" id="grid"></div>
       </div>
@@ -303,7 +321,89 @@ function render() {
   renderQueue(s);
   renderGrid(s);
   renderPool(s);
+  renderSim(s);
   renderData(s);
+}
+
+function renderSim(s) {
+  const sim = s.simulation || {};
+  const btn = $("simBtn"), status = $("simStatus"), out = $("simOut");
+
+  if (sim.status === "running") {
+    btn.disabled = true;
+    const pct = sim.total ? Math.round(100 * (sim.done || 0) / sim.total) : 0;
+    status.textContent = `running… ${pct}%`;
+    return;
+  }
+  btn.disabled = false;
+
+  if (sim.status === "error") {
+    status.textContent = "";
+    out.innerHTML = `<div class="alert warn">${esc(sim.error)}</div>`;
+    return;
+  }
+  if (sim.status !== "done") {
+    status.textContent = "";
+    if (!out.innerHTML) out.innerHTML =
+      `<div class="muted">Not run yet. Takes about a second.</div>`;
+    return;
+  }
+
+  status.textContent = `${sim.runs} drafts in ${sim.duration}s`;
+  const cands = sim.candidates || [];
+  if (!cands.length) { out.innerHTML = ""; return; }
+
+  // Shared scale across candidates so the bars are comparable.
+  const lo = Math.min(...cands.map(c => c.p10));
+  const hi = Math.max(...cands.map(c => c.p90));
+  const span = Math.max(1, hi - lo);
+  const pos = (v) => Math.max(0, Math.min(100, 100 * (v - lo) / span));
+
+  let html = `<div class="alert info" style="font-weight:600">${esc(sim.summary)}</div>`;
+  html += `<table style="margin-top:6px"><thead><tr>
+      <th>Candidate</th><th>Lineup total</th><th>Likely range</th>
+      <th>vs best</th><th>Wins</th></tr></thead><tbody>`;
+
+  cands.forEach((c, i) => {
+    const left = pos(c.p10), right = pos(c.p90), mean = pos(c.mean);
+    html += `<tr>
+      <td><b>${i === 0 ? "★ " : ""}${esc(c.name)}</b> ${posTag(c.position)}
+        <span class="muted">${esc(c.team || "")}</span></td>
+      <td><b>${num(c.mean, 0)}</b></td>
+      <td style="min-width:190px">
+        <div style="position:relative;height:16px;background:#0b0e13;
+                    border-radius:4px;border:1px solid var(--line)">
+          <div style="position:absolute;left:${left}%;width:${Math.max(2, right - left)}%;
+                      top:3px;height:8px;background:#24486b;border-radius:3px"></div>
+          <div style="position:absolute;left:${mean}%;top:1px;width:2px;height:12px;
+                      background:var(--accent)"></div>
+        </div>
+        <span class="muted" style="font-size:11px">
+          ${num(c.p10, 0)} – ${num(c.p90, 0)}</span>
+      </td>
+      <td style="color:${c.mean_gap < 0 ? "var(--warn)" : "var(--dim)"}">
+        ${c.beats_best_pct === null ? "—" : num(c.mean_gap, 1)}</td>
+      <td class="muted">${c.beats_best_pct === null ? "—"
+        : num(c.beats_best_pct, 0) + "%"}</td>
+    </tr>`;
+  });
+  html += `</tbody></table>
+    <p class="muted" style="font-size:11px;margin:8px 0 0">
+      "Wins" is how often that candidate finished ahead of the top one across the
+      same simulated drafts. Range is the middle 80% of outcomes.</p>`;
+  out.innerHTML = html;
+}
+
+async function runSim() {
+  $("simBtn").disabled = true;
+  $("simStatus").textContent = "starting…";
+  const out = await post("/api/simulate", {runs: Number($("simRuns").value)});
+  if (out.error) {
+    $("simStatus").textContent = "";
+    $("simOut").innerHTML = `<div class="alert warn">${esc(out.error)}</div>`;
+    $("simBtn").disabled = false;
+  }
+  poll();
 }
 
 function renderHeader(s) {

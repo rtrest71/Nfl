@@ -50,6 +50,8 @@ shows it in large type along with every pick number you own for all 15 rounds.
   loud warnings if the remaining rounds cannot fill a lineup.
 - **Value board** — players whose projected scoring outruns where the market is
   drafting them.
+- **What if?** — plays the rest of the draft out hundreds of times for each
+  candidate. See below.
 - **Queue export** — a ranked list to paste into Sleeper's own draft queue.
 
 ### Colour and jargon
@@ -166,6 +168,45 @@ Everything above is tunable at the top of `config.py`.
 
 ---
 
+## The "What if?" simulation
+
+Click **Run 500 drafts**. It plays the remaining rounds out 500 times for each
+of your top candidates and reports the distribution of your **projected
+starting lineup total** — the only number that decides your season, since bench
+players score nothing.
+
+It takes about a second and runs in the background, so the live pick feed keeps
+updating while it works. You can use it on the clock.
+
+Read the results like this:
+
+| Column | Meaning |
+|---|---|
+| **Lineup total** | Average points your starting lineup projects to, across all simulated drafts. |
+| **Likely range** | The middle 80% of outcomes. A wide range means the pick is a gamble. |
+| **vs best** | How many points behind the top option, on average. |
+| **Wins** | How often this candidate finished *ahead* of the top option in the **same** simulated draft. |
+
+That last column is the one to trust. Every candidate faces identical simulated
+drafts — the same opponents reaching for the same players in the same order —
+so the comparison is paired rather than two noisy averages held up side by
+side. A candidate 3 points behind on average but winning 45% of drafts is a
+genuine coin flip. One winning 2% is not.
+
+If the verdict says two players are within a couple of points, they really are
+interchangeable: take whichever you like and stop burning clock.
+
+The simulated version of you drafts using the same rules the live
+recommendation engine does — the same positional blocks, the same bench
+discount — so the forecast reflects the tool you are actually using. There is a
+test that fails if those two ever drift apart.
+
+The other 11 managers are modelled as typical Sleeper drafters: they pick near
+ADP with realistic noise, take one quarterback, and leave kickers and defenses
+until the end. They are a reasonable crowd, not your specific league-mates.
+
+---
+
 ## TROUBLESHOOTING — DRAFT DAY
 
 Work down the list. Nothing here requires restarting the draft.
@@ -262,6 +303,7 @@ sleeper.py          API client, disk cache, endpoint probing
 projections.py      paste parsing and player-name matching
 valuation.py        VOR, survival, tiers, risk, recommendations
 draftstate.py       snake pick numbering, rosters, runs, needs
+simulation.py       forward mock-draft simulation and lineup scoring
 templates/index.html   the interface
 cache/              players.json, projections.json, adp.json, league.json
 tests/              unit tests and a full simulated mock draft
@@ -296,7 +338,12 @@ roster can field a legal lineup.
   implemented from real data: injury status, age curves, depth-chart position,
   and the value gap between production and ADP. Nothing is fabricated to fill
   the gap.
-- **Not built:** the 500-run mock-draft simulation and the playoff-schedule
-  tiebreaker (Phase 3 in the spec).
+- **The simulation models a generic opponent crowd**, not your eleven specific
+  league-mates. It assumes they draft near Sleeper ADP. If your league reaches
+  wildly, its survival odds will be optimistic.
+- **Not built:** the playoff-schedule tiebreaker (the rest of Phase 3). It needs
+  a 2026 schedule the free data does not carry, and the spec makes it a
+  tiebreaker that must never override VOR — so its absence changes very few
+  picks.
 - Projected points are projections. The app is a decision aid under a
   two-minute clock, not an oracle.

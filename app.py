@@ -23,6 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import config
 import draftstate
 import projections as paste
+import simulation
 import sleeper
 import valuation
 
@@ -53,6 +54,8 @@ class Assistant:
         self.snapshot = {}
 
         self.manual_taken = []      # undo stack of manually marked players
+        self.sim = {"status": "idle"}
+        self.sim_thread = None
         self.warnings = []
         self.errors = []
         self.notes = []
@@ -362,6 +365,7 @@ class Assistant:
                 "opponent_needs": opp_needs,
                 "history": analysis["history"][-12:],
                 "manual_taken": self.manual_taken,
+                "simulation": dict(self.sim),
                 "errors": self.errors,
                 "notes": self.notes[-12:],
                 "data": {
@@ -531,6 +535,96 @@ class Assistant:
         self.recompute()
         return {"ok": True, "report": report}
 
+    def start_simulation(self, runs=500, player_ids=None):
+        """Kick off a forward mock-draft simulation in the background.
+
+        It runs off a snapshot of the board so the 3-second poll loop keeps
+        updating while it works - the draft never waits on the simulation.
+        """
+        with self.lock:
+            if self.sim.get("status") == "running":
+                return {"ok": False, "error": "A simulation is already running."}
+            if not self.board:
+                return {"ok": False, "error": "No player data loaded."}
+
+            snapshot = self.snapshot or {}
+            slot = self.my_slot()
+            if not slot:
+                return {"ok": False,
+                        "error": "Your draft slot is not known yet. Set it in the "
+                                 "Data panel to simulate before the draft starts."}
+
+            recommendation = snapshot.get("recommendation") or {}
+            if not player_ids:
+                player_ids = []
+                if recommendation.get("top"):
+                    player_ids.append(recommendation["top"]["player"]["player_id"])
+                for alt in recommendation.get("alternatives", [])[:3]:
+                    player_ids.append(alt["player"]["player_id"])
+            player_ids = [str(p) for p in player_ids][:6]
+            if not player_ids:
+                return {"ok": False, "error": "No candidates to compare."}
+
+            runs = max(25, min(int(runs or 500), 2000))
+
+            # Copy the board so a mid-run rebuild cannot shift it underneath us.
+            board_copy = [dict(p) for p in self.board]
+            shape = self.draft_shape()
+            analysis = draftstate.analyze(
+                self.picks, self.players, shape["teams"], shape["type"],
+                shape["reversal_round"])
+            taken = set(analysis["taken"])
+            taken.update(p["player_id"] for p in self.manual_taken)
+            state = {
+                "taken": taken,
+                "current_pick": snapshot.get("draft", {}).get("current_pick", 1),
+            }
+            my_players = list(snapshot.get("roster_players") or [])
+            for player in my_players:
+                full = next((p for p in board_copy
+                             if p["player_id"] == player["player_id"]), None)
+                player["points"] = (full or {}).get("points") or 0.0
+            opponent_rosters = analysis["rosters"]
+
+            self.sim = {"status": "running", "runs": runs, "done": 0,
+                        "total": runs * len(player_ids),
+                        "started_at": time.time()}
+
+        def progress(done, total):
+            with self.lock:
+                if self.sim.get("status") == "running":
+                    self.sim["done"] = done
+                    self.sim["total"] = total
+
+        def worker():
+            started = time.time()
+            try:
+                result = simulation.run(
+                    board_copy, state, shape, slot, opponent_rosters, my_players,
+                    player_ids, runs=runs, progress=progress)
+            except Exception as exc:  # noqa: BLE001 - report, never crash the app
+                traceback.print_exc()
+                with self.lock:
+                    self.sim = {"status": "error", "error": str(exc)}
+                return
+            with self.lock:
+                if result.get("error"):
+                    self.sim = {"status": "error", "error": result["error"]}
+                else:
+                    result["status"] = "done"
+                    result["duration"] = round(time.time() - started, 2)
+                    self.sim = result
+                self.log("simulation finished in %.1fs" % (time.time() - started))
+            self.recompute()
+
+        self.sim_thread = threading.Thread(target=worker, daemon=True)
+        self.sim_thread.start()
+        # Refresh the snapshot now so the UI shows "running" on the next poll
+        # rather than waiting up to a full poll cycle for the status to appear.
+        self.recompute()
+        return {"ok": True, "started": True, "runs": runs,
+                "candidates": len(player_ids)}
+
     def set_slot(self, slot):
         with self.lock:
             self.slot_override = int(slot) if slot else None
@@ -618,6 +712,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/undo":
                 ok, detail = self.assistant.undo_manual()
                 return self._json({"ok": ok, "detail": detail})
+            if path == "/api/simulate":
+                return self._json(self.assistant.start_simulation(
+                    runs=body.get("runs", 500),
+                    player_ids=body.get("player_ids")))
             if path == "/api/slot":
                 self.assistant.set_slot(body.get("slot"))
                 return self._json({"ok": True})

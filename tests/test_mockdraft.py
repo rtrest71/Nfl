@@ -11,6 +11,7 @@ import random
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -359,7 +360,58 @@ class MockDraftTest(unittest.TestCase):
         expected = 120 * 1.0 + 1800 * 0.1 + 15 * 6
         self.assertAlmostEqual(boosted["points"], expected, places=1)
 
-    def test_09_http_layer_serves_state_and_page(self):
+    def test_09_simulation_runs_in_the_background(self):
+        """The 500-run simulation must not block the live poll loop."""
+        self.server.picks = []
+        self.server.draft_order = {fake_sleeper.USER_ID: self.MY_SLOT}
+        self.server.status = "drafting"
+        assistant = self._assistant()
+
+        started = assistant.start_simulation(runs=100)
+        self.assertTrue(started.get("ok"), started)
+        self.assertGreaterEqual(started["candidates"], 1)
+
+        # While it runs, the app must keep serving state.
+        snapshot = assistant.snapshot
+        self.assertTrue(snapshot["ok"])
+        self.assertIn(snapshot["simulation"]["status"], ("running", "done"))
+
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            with assistant.lock:
+                status = assistant.sim.get("status")
+            if status in ("done", "error"):
+                break
+            assistant.poll_once()
+            assistant.recompute()
+            time.sleep(0.2)
+
+        with assistant.lock:
+            sim = dict(assistant.sim)
+        self.assertEqual(sim.get("status"), "done", sim)
+        self.assertEqual(sim["runs"], 100)
+        self.assertTrue(sim["candidates"])
+        for entry in sim["candidates"]:
+            self.assertGreater(entry["mean"], 0)
+            self.assertEqual(entry["incomplete_lineup_runs"], 0,
+                             "simulated draft could not field a lineup")
+        self.assertTrue(sim["summary"])
+
+        assistant.recompute()
+        self.assertEqual(assistant.snapshot["simulation"]["status"], "done")
+
+    def test_10_simulation_refuses_without_a_slot(self):
+        self.server.picks = []
+        self.server.draft_order = {}
+        self.server.status = "pre_draft"
+        assistant = self._assistant()
+        assistant.slot_override = None
+
+        result = assistant.start_simulation(runs=20)
+        self.assertFalse(result.get("ok"))
+        self.assertIn("slot", result["error"].lower())
+
+    def test_11_http_layer_serves_state_and_page(self):
         import http.client
         import threading
         from http.server import ThreadingHTTPServer
