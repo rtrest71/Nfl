@@ -102,44 +102,73 @@ def main():
     print("  the player has most likely been cleared since it was written.")
     print("  Where Sleeper shows a status, the app is ALREADY penalising him.")
 
+    # A blueprint written days ago can be flatly contradicted by today's depth
+    # chart. That is worth calling out by name, not leaving in a table.
+    contradictions = []
+    for name, note in FLAGGED:
+        pid = index.match(name)
+        if not pid or pid not in by_id:
+            continue
+        entry = by_id[pid]
+        order = entry.get("depth_chart_order")
+        recommended = any(word in note.lower()
+                          for word in ("better bet", "safer", "conditional buy"))
+        if recommended and isinstance(order, (int, float)) and order and order >= 2:
+            contradictions.append((entry["name"], int(order), note))
+
+    if contradictions:
+        print("\n  !! DEPTH CHART CONTRADICTS THE BLUEPRINT")
+        for name, order, note in contradictions:
+            print("     %s - blueprint says \"%s\", but Sleeper lists him as"
+                  % (name, note))
+            print("     backup #%d on his own team. The app penalises backups and"
+                  % order)
+            print("     blocks them before round 12. Trust the depth chart.")
+
     # ------------------------------------------------------------------ cliffs
     header("2. POSITIONAL CLIFFS - claimed vs measured in YOUR data")
     print("  The blueprint claims cliffs from its own ADP source. These are")
     print("  measured from your projections under your league's scoring.\n")
 
     for position, claimed in CLAIMED_CLIFFS:
-        group = [p for p in board
-                 if p["position"] == position and p.get("adp")
-                 and p["adp"] <= config.VALUE_GAP_ADP_LIMIT]
-        group.sort(key=lambda p: p["adp"])
-        if len(group) < 6:
-            print("  %-4s not enough data" % position)
-            continue
-
-        # The biggest points drop between consecutive players by ADP order.
-        worst = None
-        for i in range(1, len(group)):
-            drop = group[i - 1]["points"] - group[i]["points"]
-            if worst is None or drop > worst[0]:
-                worst = (drop, group[i - 1], group[i])
-        drop, before, after = worst
-
-        # Also: where does the startable tier actually end?
         baseline_rank = config.baselines().get(position, 12)
         ranked = sorted([p for p in board if p["position"] == position],
                         key=lambda p: p["points"], reverse=True)
-        last_startable = ranked[min(baseline_rank, len(ranked)) - 1]
+        if len(ranked) < baseline_rank + 4:
+            print("  %-4s not enough data" % position)
+            continue
 
-        print("  %-4s blueprint says cliff at ADP ~%d" % (position, claimed))
-        print("       biggest drop in your data: %.0f pts, between %s (ADP %.0f)"
-              % (drop, before["name"], before["adp"]))
-        print("       and %s (ADP %.0f)" % (after["name"], after["adp"]))
-        print("       last startable %s in this league: %s at ADP %s"
-              % (position, last_startable["name"],
-                 ("%.0f" % last_startable["adp"]) if last_startable.get("adp")
-                 else "unranked"))
-        verdict = ("AGREES" if abs(before["adp"] - claimed) <= 20 else "DIFFERS")
-        print("       -> %s with the blueprint\n" % verdict)
+        # Search for the cliff ONLY among players anyone would consider: the
+        # startable tier plus a few beyond. Searching the whole list finds
+        # where projections fall to nothing among players nobody drafts, which
+        # is the end of the list, not a cliff.
+        window = ranked[:baseline_rank + 12]
+        worst = None
+        for i in range(1, len(window)):
+            drop = window[i - 1]["points"] - window[i]["points"]
+            if worst is None or drop > worst[0]:
+                worst = (drop, window[i - 1], window[i], i)
+        drop, before, after, index = worst
+
+        last_startable = ranked[baseline_rank - 1]
+        adp_text = lambda p: ("%.0f" % p["adp"]) if p.get("adp") else "undrafted"
+
+        print("  %-4s blueprint says the cliff is at ADP ~%d" % (position, claimed))
+        print("       biggest drop among startable %ss: %.0f pts, after %s%d"
+              % (position, drop, position, index))
+        print("       %s (ADP %s) -> %s (ADP %s)"
+              % (before["name"], adp_text(before), after["name"], adp_text(after)))
+        print("       last startable %s (%s%d): %s, going around pick %s"
+              % (position, position, baseline_rank, last_startable["name"],
+                 adp_text(last_startable)))
+
+        cliff_adp = before.get("adp")
+        if cliff_adp:
+            verdict = "AGREES" if abs(cliff_adp - claimed) <= 25 else "DIFFERS"
+            print("       -> cliff lands near pick %.0f, so %s with the blueprint\n"
+                  % (cliff_adp, verdict))
+        else:
+            print("       -> cliff is past the drafted range\n")
 
     # --------------------------------------------------------------- adp source
     header("3. ADP SOURCE - does the blueprint's room match yours?")
