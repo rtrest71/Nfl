@@ -130,6 +130,26 @@ class Assistant:
 
             drafts = sleeper.get_drafts(league["league_id"])
             draft, others = sleeper.pick_draft(drafts, draft_id=self.draft_id_override)
+
+            # A requested draft that is not one of the league's own - a mock
+            # draft, say - has to be fetched directly. Practising against a
+            # mock is the whole reason this path exists.
+            if self.draft_id_override and (
+                    not draft
+                    or str(draft.get("draft_id")) != str(self.draft_id_override)):
+                draft = sleeper.get_draft(self.draft_id_override)
+                others = []
+                if draft:
+                    self.log("following draft %s directly (not a league draft)"
+                             % self.draft_id_override)
+                    self.warnings.append(
+                        "PRACTICE MODE: following draft %s, which is not your "
+                        "league's draft. Restart without --draft-id for the "
+                        "real thing." % self.draft_id_override)
+                else:
+                    self.errors.append(
+                        "Could not find draft %s." % self.draft_id_override)
+
             for other in others:
                 self.log("ignoring other draft: %s" % sleeper.describe_draft(other))
             if others:

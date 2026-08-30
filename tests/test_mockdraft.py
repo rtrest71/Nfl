@@ -411,7 +411,66 @@ class MockDraftTest(unittest.TestCase):
         self.assertFalse(result.get("ok"))
         self.assertIn("slot", result["error"].lower())
 
-    def test_11_http_layer_serves_state_and_page(self):
+    def test_11_can_follow_a_sleeper_mock_draft(self):
+        """A Sleeper mock draft is a separate draft with no league attached.
+
+        Practising against one is the only way to rehearse before the real
+        draft, so --draft-id must be able to follow a draft that is not one of
+        the league's own.
+        """
+        import app
+
+        # The league draft is dormant; the mock is live with a different slot.
+        self.server.picks = []
+        self.server.status = "pre_draft"
+        self.server.draft_order = {}
+        self.server.mock_picks = []
+        self.server.mock_status = "drafting"
+        self.server.mock_draft_order = {fake_sleeper.USER_ID: 4}
+
+        assistant = app.Assistant(draft_id_override=fake_sleeper.MOCK_DRAFT_ID)
+        assistant.load_cached_data()
+        assistant.resolve_league()
+        assistant.poll_once()
+        assistant.recompute()
+
+        snap = assistant.snapshot
+        self.assertEqual(snap["league"]["draft_id"], fake_sleeper.MOCK_DRAFT_ID,
+                         "app did not follow the mock draft")
+        self.assertEqual(snap["me"]["slot"], 4,
+                         "app did not read my slot from the mock draft")
+        self.assertTrue(
+            any("PRACTICE MODE" in w for w in snap["warnings"]),
+            "app did not warn that it is following a practice draft")
+
+        # Picks made in the mock must flow through exactly as real ones do.
+        ordered = sorted(self.players, key=lambda p: self.adp.get(p, 9999))
+        for pick_no in range(1, 4):
+            round_no, slot = draftstate.slot_of_pick(pick_no)
+            self.server.add_mock_pick(pick_no, round_no, slot, ordered[pick_no - 1])
+        assistant.poll_once()
+        assistant.recompute()
+
+        snap = assistant.snapshot
+        self.assertEqual(snap["draft"]["picks_made"], 3)
+        self.assertEqual(snap["draft"]["current_pick"], 4)
+        drafted = {p["player_id"] for p in snap["pool"] if p["drafted"]}
+        self.assertEqual(drafted, set(ordered[:3]),
+                         "mock draft picks did not remove players from the pool")
+        self.assertTrue(snap["me"]["on_the_clock"], "slot 4 should be on the clock")
+
+    def test_12_finds_mock_drafts_on_the_account(self):
+        drafts = sleeper.get_user_drafts(fake_sleeper.USER_ID)
+        self.assertEqual(len(drafts), 2)
+        league_ids = {fake_sleeper.LEAGUE_ID}
+        mocks = [d for d in drafts if sleeper.draft_is_mock(d, league_ids)]
+        self.assertEqual(len(mocks), 1)
+        self.assertEqual(mocks[0]["draft_id"], fake_sleeper.MOCK_DRAFT_ID)
+        # The league's own draft must never be mistaken for a mock.
+        real = [d for d in drafts if not sleeper.draft_is_mock(d, league_ids)]
+        self.assertEqual(real[0]["draft_id"], fake_sleeper.DRAFT_ID)
+
+    def test_13_http_layer_serves_state_and_page(self):
         import http.client
         import threading
         from http.server import ThreadingHTTPServer

@@ -133,6 +133,30 @@ def main():
         for item in problems:
             print("     * %s" % item)
 
+    # Mock drafts are separate draft objects with no league attached, so they
+    # never appear under the league's drafts. Find them so the app can follow
+    # one for practice.
+    try:
+        all_drafts = sleeper.get_user_drafts(user["user_id"]) or []
+    except sleeper.SleeperError:
+        all_drafts = []
+
+    league_ids = {str(l.get("league_id")) for l in (leagues or [])}
+    mocks = [d for d in all_drafts if sleeper.draft_is_mock(d, league_ids)]
+    if mocks:
+        print("\n  MOCK / PRACTICE DRAFTS ON YOUR ACCOUNT (%d)" % len(mocks))
+        for mock in mocks[:8]:
+            print("     %s" % sleeper.describe_draft(mock))
+        newest = mocks[0]
+        print("\n  To practise against one, start the app with:")
+        print("     ./start.command --draft-id %s" % newest.get("draft_id"))
+        print("  Then restart WITHOUT --draft-id before the real draft.")
+    else:
+        print("\n  No mock drafts found on your account.")
+        print("  Start one in Sleeper (Mock Draft lobby), then run this again")
+        print("  to get the id. Or take it from the draft's web address:")
+        print("     sleeper.com/draft/nfl/<the long number is the draft id>")
+
     print("\n  START THE APP WITH:")
     command = "     python3 app.py"
     if rounds and rounds != config.ROUNDS:

@@ -145,6 +145,26 @@ def get_draft(draft_id):
     return get_json("%s/draft/%s" % (API, draft_id))
 
 
+def get_user_drafts(user_id, season=None):
+    """Every draft this user is in, including mock drafts.
+
+    A Sleeper mock draft is its own draft object, not attached to any league,
+    so it never shows up under the league's drafts. This is how we find one to
+    practise against.
+    """
+    season = season or config.SEASON
+    return get_json("%s/user/%s/drafts/%s/%s"
+                    % (API, user_id, config.SPORT, season))
+
+
+def draft_is_mock(draft, league_ids=()):
+    """True when a draft is not attached to one of the user's real leagues."""
+    league_id = (draft or {}).get("league_id")
+    if not league_id:
+        return True
+    return str(league_id) not in {str(x) for x in league_ids}
+
+
 def get_picks(draft_id):
     return get_json("%s/draft/%s/picks" % (API, draft_id))
 

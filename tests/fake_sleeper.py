@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 USER_ID = "100000000000000001"
 LEAGUE_ID = "900000000000000001"
 DRAFT_ID = "800000000000000001"
+MOCK_DRAFT_ID = "700000000000000009"
 
 TEAMS = ["ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE", "DAL", "DEN",
          "DET", "GB", "HOU", "IND", "JAX", "KC", "LAC", "LAR", "LV", "MIA",
@@ -154,6 +155,10 @@ class FakeSleeper:
         self.status = status
         self.draft_order = draft_order or {}
         self.lock = threading.Lock()
+        # A standalone mock draft, with its own picks and its own slot.
+        self.mock_picks = []
+        self.mock_status = "drafting"
+        self.mock_draft_order = {USER_ID: 4}
 
         outer = self
 
@@ -200,6 +205,23 @@ class FakeSleeper:
             "league_id": LEAGUE_ID, "season": "2026",
         }
 
+    def mock_object(self):
+        """A Sleeper mock draft: a real draft object with no league attached."""
+        return {
+            "draft_id": MOCK_DRAFT_ID, "status": self.mock_status, "type": "snake",
+            "settings": {"teams": 12, "rounds": 15, "reversal_round": 0},
+            "draft_order": self.mock_draft_order or None,
+            "slot_to_roster_id": {}, "league_id": None, "season": "2026",
+        }
+
+    def add_mock_pick(self, pick_no, round_no, slot, player_id):
+        with self.lock:
+            self.mock_picks.append({
+                "pick_no": pick_no, "round": round_no, "draft_slot": slot,
+                "player_id": str(player_id), "picked_by": "user%d" % slot,
+                "metadata": {},
+            })
+
     def route(self, path):
         with self.lock:
             if path == "/v1/user/rtrestini2019":
@@ -224,6 +246,14 @@ class FakeSleeper:
                 for i in range(2, 13):
                     users.append({"user_id": "user%d" % i, "display_name": "Manager %d" % i})
                 return users
+            if path == "/v1/user/%s/drafts/nfl/2026" % USER_ID:
+                # The league draft plus a standalone mock, exactly as Sleeper
+                # reports them: a mock carries no league_id.
+                return [self.draft_object(), self.mock_object()]
+            if path == "/v1/draft/%s" % MOCK_DRAFT_ID:
+                return self.mock_object()
+            if path == "/v1/draft/%s/picks" % MOCK_DRAFT_ID:
+                return list(self.mock_picks)
             if path == "/v1/draft/%s" % DRAFT_ID:
                 return self.draft_object()
             if path == "/v1/draft/%s/picks" % DRAFT_ID:
