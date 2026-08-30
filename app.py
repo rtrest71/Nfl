@@ -720,6 +720,56 @@ class Assistant:
         return {"ok": True, "started": True, "runs": runs,
                 "candidates": len(player_ids)}
 
+    def list_drafts(self):
+        """Every draft on the account: league drafts and mock drafts alike.
+
+        The Sleeper phone app has no address bar, so there is no link to copy.
+        This lets the page list what you are actually in and follow one with a
+        click, with nothing to type.
+        """
+        if self.offline:
+            return {"ok": False, "error": "Running offline - cannot ask Sleeper."}
+        try:
+            user = self.user or sleeper.get_user()
+            leagues = sleeper.get_leagues(user["user_id"]) or []
+            league_names = {str(l.get("league_id")): l.get("name")
+                            for l in leagues}
+
+            found, seen = [], set()
+
+            def add(draft, league_name=None):
+                draft_id = str((draft or {}).get("draft_id") or "")
+                if not draft_id or draft_id in seen:
+                    return
+                seen.add(draft_id)
+                settings = draft.get("settings") or {}
+                league_id = str(draft.get("league_id") or "")
+                name = league_name or league_names.get(league_id)
+                found.append({
+                    "draft_id": draft_id,
+                    "status": draft.get("status"),
+                    "type": draft.get("type"),
+                    "teams": settings.get("teams"),
+                    "rounds": settings.get("rounds"),
+                    "league": name,
+                    "is_mock": not name,
+                    "current": str(draft_id) == str(
+                        (self.draft or {}).get("draft_id")),
+                })
+
+            for draft in (sleeper.get_user_drafts(user["user_id"]) or []):
+                add(draft)
+            for league in leagues:
+                for draft in (sleeper.get_drafts(league["league_id"]) or []):
+                    add(draft, league.get("name"))
+
+            rank = {"drafting": 0, "paused": 1, "pre_draft": 2, "complete": 3}
+            found.sort(key=lambda d: (rank.get(d["status"], 4),
+                                      0 if d["is_mock"] else 1))
+            return {"ok": True, "drafts": found}
+        except sleeper.SleeperError as exc:
+            return {"ok": False, "error": str(exc)}
+
     def follow_draft(self, draft_id):
         """Watch any Sleeper draft by id - a mock, or the real one.
 
@@ -878,6 +928,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(snapshot or {"ok": False, "error": "no data yet"})
             if path == "/api/health":
                 return self._json({"ok": True, "time": time.time()})
+            if path == "/api/drafts":
+                return self._json(self.assistant.list_drafts())
             return self._json({"error": "not found"}, 404)
         except FileNotFoundError:
             return self._json({"error": "templates/index.html is missing"}, 500)

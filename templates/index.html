@@ -353,19 +353,29 @@ function renderPractice(s) {
     box.innerHTML = `
       <p class="muted" style="margin:0 0 8px;font-size:12px">
         <b>To rehearse the way you will actually play:</b> start a mock draft in
-        the Sleeper app, paste its draft number here, and pick in Sleeper. Every
-        pick — yours and everyone else's — appears here automatically.</p>
-      <div class="flex" style="margin-bottom:6px">
-        <input id="followId" placeholder="Sleeper draft number or link"
-               style="flex:1;min-width:170px">
-        <button onclick="followDraft()"
-                style="background:#1c3a5e;border-color:var(--accent)">Follow it</button>
+        the Sleeper app, click below, and pick only in Sleeper. Every pick —
+        yours and everyone else's — appears here on its own.</p>
+      <div class="flex" style="margin-bottom:8px">
+        <button onclick="loadDrafts()" id="findBtn"
+                style="background:#1c3a5e;border-color:var(--accent);
+                       font-size:15px;padding:9px 16px">
+          Find my Sleeper drafts</button>
+        <span class="muted" id="findMsg"></span>
       </div>
+      <div id="draftList" style="margin-bottom:10px"></div>
       <div class="muted" style="font-size:11px;margin-bottom:12px">
-        Now watching draft <span class="mono">${esc(following || "—")}</span>.
+        Now watching <span class="mono">${esc(following || "—")}</span>.
         <a href="#" onclick="followDraft(true);return false"
            style="color:var(--accent)">Go back to my league's draft</a>
       </div>
+      <details style="margin-bottom:10px">
+        <summary>Type a draft number by hand</summary>
+        <div class="flex" style="margin-top:8px">
+          <input id="followId" placeholder="draft number"
+                 style="flex:1;min-width:150px">
+          <button onclick="followDraft()">Follow it</button>
+        </div>
+      </details>
       <details>
         <summary>Or rehearse offline against simulated managers</summary>
         <p class="muted" style="font-size:12px;margin:8px 0">
@@ -406,10 +416,41 @@ function renderPractice(s) {
       End practice — back to my live draft</button>`;
 }
 
-async function followDraft(reset) {
+async function loadDrafts() {
+  const msg = $("findMsg"), list = $("draftList");
+  msg.textContent = "asking Sleeper…";
+  const res = await fetch("/api/drafts", {cache: "no-store"});
+  const out = await res.json();
+  if (!out.ok) {
+    msg.innerHTML = `<span class="err">${esc(out.error)}</span>`;
+    return;
+  }
+  msg.textContent = `${out.drafts.length} found`;
+  if (!out.drafts.length) {
+    list.innerHTML = `<div class="alert warn">Sleeper reports no drafts on your
+      account. Start a mock draft in the Sleeper app and click again.</div>`;
+    return;
+  }
+  list.innerHTML = out.drafts.map(d => `
+    <div class="flex" style="padding:7px 9px;border:1px solid var(--line);
+         border-radius:7px;margin-bottom:6px;background:var(--panel2)">
+      <div style="flex:1;min-width:0">
+        <b>${d.is_mock ? "Mock draft" : esc(d.league || "League draft")}</b>
+        ${d.current ? '<span class="badge">watching now</span>' : ""}<br>
+        <span class="muted" style="font-size:11px">
+          ${esc(d.status || "?")} · ${d.teams || "?"} teams ·
+          ${d.rounds || "?"} rounds · <span class="mono">${esc(d.draft_id)}</span>
+        </span>
+      </div>
+      ${d.current ? "" :
+        `<button onclick="followDraft(false,'${d.draft_id}')">Follow</button>`}
+    </div>`).join("");
+}
+
+async function followDraft(reset, id) {
   const box = $("followId");
-  const id = reset ? "" : (box ? box.value.trim() : "");
-  const out = await post("/api/follow", {draft_id: id});
+  const wanted = reset ? "" : (id || (box ? box.value.trim() : ""));
+  const out = await post("/api/follow", {draft_id: wanted});
   if (out && out.ok === false) alert(out.error || "could not follow that draft");
   poll();
 }

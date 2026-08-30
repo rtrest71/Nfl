@@ -628,7 +628,33 @@ class MockDraftTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("999999999999", result["error"])
 
-    def test_18_http_layer_serves_state_and_page(self):
+    def test_18_lists_drafts_so_nothing_has_to_be_typed(self):
+        """The Sleeper phone app has no address bar, so there is no link to
+        copy. The page must be able to find the drafts itself."""
+        self.server.mock_status = "drafting"
+        self.server.mock_draft_order = {fake_sleeper.USER_ID: 5}
+        assistant = self._assistant()
+
+        result = assistant.list_drafts()
+        self.assertTrue(result["ok"], result)
+        drafts = result["drafts"]
+        self.assertEqual(len(drafts), 2)
+
+        mocks = [d for d in drafts if d["is_mock"]]
+        real = [d for d in drafts if not d["is_mock"]]
+        self.assertEqual(len(mocks), 1)
+        self.assertEqual(mocks[0]["draft_id"], fake_sleeper.MOCK_DRAFT_ID)
+        self.assertEqual(real[0]["league"], "Fantasy NFL 2026")
+        self.assertTrue(real[0]["current"], "league draft not flagged as current")
+        # A live draft must sort above one that has not started.
+        self.assertEqual(drafts[0]["status"], "drafting")
+
+        # Following straight from the listing, with no typing at all.
+        self.assertTrue(assistant.follow_draft(mocks[0]["draft_id"])["ok"])
+        self.assertEqual(assistant.snapshot["league"]["draft_id"],
+                         fake_sleeper.MOCK_DRAFT_ID)
+
+    def test_19_http_layer_serves_state_and_page(self):
         import http.client
         import threading
         from http.server import ThreadingHTTPServer
