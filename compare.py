@@ -40,7 +40,15 @@ def main():
                         help="Draft slot to assume (default: your live slot, "
                              "or 6 before the order is set).")
     parser.add_argument("--runs", type=int, default=500)
+    # Comma-separated rather than a list: "--have A B C" would swallow the
+    # players being compared, because both take multiple values.
+    parser.add_argument("--have", default="",
+                        help='Players already on your roster, comma separated: '
+                             '--have "Bijan Robinson, Brock Bowers". A round-2 '
+                             'choice with a stud back in hand is a different '
+                             'question from the same choice with nothing.')
     args = parser.parse_args()
+    args.have = [n.strip() for n in args.have.split(",") if n.strip()]
 
     players = sleeper.cache_read(config.PLAYERS_CACHE, {}) or {}
     proj_blob = sleeper.cache_read(config.PROJECTIONS_CACHE, {}) or {}
@@ -97,16 +105,46 @@ def main():
     for name in missing:
         print("  ! could not find '%s'" % name)
 
-    # Add the app's own choice as the benchmark, so there is always something
-    # to measure the named players against.
+    # Players already on the roster, plus everyone taken ahead of this pick.
+    owned, taken = [], set()
+    for name in args.have:
+        pid = index.match(name)
+        if pid and pid in by_id:
+            owned.append(by_id[pid])
+            taken.add(pid)
+        else:
+            print("  ! could not find '%s' for your roster" % name)
+
+    # Everyone with an ADP comfortably inside this pick is presumed gone, so
+    # the board looks the way it will when you are actually deciding.
+    for entry in board:
+        if entry.get("adp") and entry["adp"] < pick - 2:
+            taken.add(entry["player_id"])
+    for pid in candidates:
+        taken.discard(pid)
+
+    if owned:
+        print("\n  ALREADY ON YOUR ROSTER")
+        for entry in owned:
+            print("     %-26s %-4s %7.0f pts" % (entry["name"][:26],
+                                                 entry["position"],
+                                                 entry["points"]))
+
+    my_positions = [p["position"] for p in owned]
     remaining = [p for p in my_picks if p >= pick]
     state = {
-        "taken": set(), "round": round_no, "current_pick": pick,
+        "taken": taken, "round": round_no, "current_pick": pick,
         "my_next_pick": remaining[1] if len(remaining) > 1 else None,
         "picks_until_next": (remaining[1] - pick) if len(remaining) > 1 else None,
-        "my_roster": [], "my_players": [], "my_remaining_picks": remaining,
-        "needs": valuation.roster_needs([]), "picks_left": len(remaining),
-        "opponent_needs": {},
+        "my_roster": my_positions,
+        "my_players": [{"player_id": p["player_id"], "position": p["position"],
+                        "team": p.get("team")} for p in owned],
+        "my_remaining_picks": remaining,
+        "needs": valuation.roster_needs(my_positions),
+        "picks_left": len(remaining), "opponent_needs": {},
+        "startable_qbs_left": sum(
+            1 for p in board if p["position"] == "QB"
+            and p["player_id"] not in taken and p.get("vor", 0) > 0),
     }
     recommendation = valuation.recommend(board, state)
     app_pick = None
@@ -114,6 +152,9 @@ def main():
         app_pick = recommendation["top"]["player"]["player_id"]
         if app_pick not in candidates:
             candidates.insert(0, app_pick)
+    # A candidate is by definition still on the board, whatever his ADP says.
+    for pid in candidates:
+        state["taken"].discard(pid)
 
     if not candidates:
         print("  Nothing to compare. Name at least one player.")
@@ -132,7 +173,9 @@ def main():
 
     shape = {"teams": config.TEAMS, "rounds": config.ROUNDS,
              "type": "snake", "reversal_round": 0}
-    result = simulation.run(board, state, shape, slot, {}, [],
+    result = simulation.run(board, state, shape, slot, {},
+                            [{"position": p["position"], "points": p["points"],
+                              "name": p["name"]} for p in owned],
                             candidates, runs=args.runs)
     if result.get("error"):
         print("\n  %s" % result["error"])
