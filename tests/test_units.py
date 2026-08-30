@@ -562,6 +562,89 @@ class TestValueGapScoping(unittest.TestCase):
             self.assertGreater(player["vor"], 0)
 
 
+class TestDurabilityAndRookies(unittest.TestCase):
+    """Injury history, as far as free data supports it, and the rookie bet."""
+
+    def _player(self, **kwargs):
+        player = {"player_id": "x", "position": "RB", "name": "Test", "age": 25,
+                  "depth_chart_order": 1, "years_exp": 5, "value_gap": 0}
+        player.update(kwargs)
+        return player
+
+    def test_missing_games_is_penalised(self):
+        durable, _ = valuation.risk_adjustment(
+            self._player(avg_games_missed=0.0), current_round=2)
+        fragile, reasons = valuation.risk_adjustment(
+            self._player(avg_games_missed=5.0), current_round=2)
+        self.assertLess(fragile, durable)
+        self.assertAlmostEqual(
+            durable - fragile, 5.0 * config.DURABILITY_PENALTY_PER_GAME, places=1)
+        self.assertTrue(any("missed about 5 games" in r for r in reasons))
+
+    def test_small_absences_are_noise_and_ignored(self):
+        clean, _ = valuation.risk_adjustment(
+            self._player(), current_round=2)
+        barely, _ = valuation.risk_adjustment(
+            self._player(avg_games_missed=1.0), current_round=2)
+        self.assertAlmostEqual(clean, barely, places=6)
+
+    def test_penalty_is_capped(self):
+        _, reasons = valuation.risk_adjustment(
+            self._player(avg_games_missed=17.0), current_round=2)
+        base, _ = valuation.risk_adjustment(self._player(), current_round=2)
+        worst, _ = valuation.risk_adjustment(
+            self._player(avg_games_missed=17.0), current_round=2)
+        self.assertLessEqual(base - worst, config.DURABILITY_MAX_PENALTY + 0.01)
+
+    def test_unknown_history_is_not_treated_as_clean_or_dirty(self):
+        """A rookie has no record. That is unknown, not a bonus and not a hit."""
+        unknown, reasons = valuation.risk_adjustment(
+            self._player(avg_games_missed=None), current_round=2)
+        clean, _ = valuation.risk_adjustment(self._player(), current_round=2)
+        self.assertEqual(unknown, clean)
+        self.assertFalse(any("missed" in r for r in reasons))
+
+    def test_rookies_get_no_bonus_in_the_conservative_phase(self):
+        early, reasons = valuation.risk_adjustment(
+            self._player(years_exp=0, age=22), current_round=3)
+        self.assertFalse(any("rookie" in r.lower() for r in reasons))
+
+    def test_starting_rookie_is_rewarded_once_the_profile_flips(self):
+        late = config.UPSIDE_CROSSOVER_ROUND
+        starter, reasons = valuation.risk_adjustment(
+            self._player(years_exp=0, age=22, depth_chart_order=1),
+            current_round=late)
+        backup, _ = valuation.risk_adjustment(
+            self._player(years_exp=0, age=22, depth_chart_order=3),
+            current_round=late)
+        self.assertGreater(starter, backup,
+                           "a rookie already starting should outrank a buried one")
+        self.assertTrue(any("already his team's starter" in r for r in reasons))
+
+    def test_second_year_players_get_a_smaller_bet(self):
+        late = config.UPSIDE_CROSSOVER_ROUND
+        rookie, _ = valuation.risk_adjustment(
+            self._player(years_exp=0, age=22), current_round=late)
+        second, reasons = valuation.risk_adjustment(
+            self._player(years_exp=1, age=23), current_round=late)
+        veteran, _ = valuation.risk_adjustment(
+            self._player(years_exp=6, age=28), current_round=late)
+        self.assertGreater(rookie, second)
+        self.assertGreater(second, veteran)
+        self.assertTrue(any("second season" in r for r in reasons))
+
+    def test_quarterbacks_and_kickers_are_not_rookie_bets(self):
+        late = config.UPSIDE_CROSSOVER_ROUND
+        _, reasons = valuation.risk_adjustment(
+            self._player(position="K", years_exp=0, age=22), current_round=late)
+        self.assertFalse(any("rookie" in r.lower() for r in reasons))
+
+    def test_profile_is_sixty_percent_conservative(self):
+        conservative = config.UPSIDE_CROSSOVER_ROUND - 1
+        self.assertEqual(conservative, 9)
+        self.assertAlmostEqual(conservative / config.ROUNDS, 0.6, places=2)
+
+
 class TestOwnHandcuff(unittest.TestCase):
     """Someone else's backup is a wasted spot. Your own RB1's backup is
     insurance against the worst thing that can happen in a no-IR league."""

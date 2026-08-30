@@ -210,18 +210,41 @@ def risk_adjustment(player, current_round):
         if gap >= 12:
             reasons.append("going %d picks later than his production deserves" % int(gap))
 
-    # Late-round upside tilt: reward young players with room to grow.
-    if late:
+    # Durability: how many games he has actually managed in prior seasons.
+    # A projection quietly assumes a full season; this is the correction.
+    missed = player.get("avg_games_missed")
+    if (isinstance(missed, (int, float))
+            and missed >= config.DURABILITY_MIN_GAMES_MISSED):
+        penalty = min(config.DURABILITY_MAX_PENALTY,
+                      missed * config.DURABILITY_PENALTY_PER_GAME)
+        penalty *= (1.0 if not late else 0.6)
+        delta -= penalty
+        reasons.append("has missed about %.0f games a season recently - a "
+                       "full year from him is not the safe assumption" % missed)
+
+    # The aggressive 40%: rookies and second-year players, once the profile
+    # flips. Weighted toward those already at the top of their depth chart -
+    # a bet on a starter, not on a name.
+    if late and pos in ("RB", "WR", "TE"):
         exp = player.get("years_exp")
-        if isinstance(exp, (int, float)) and exp is not None and exp <= 2 and pos in ("RB", "WR", "TE"):
-            delta += 5.0
-            reasons.append("young enough to break out")
+        order = player.get("depth_chart_order")
+        if exp == 0:
+            delta += config.ROOKIE_UPSIDE_BONUS
+            if order == 1:
+                delta += config.ROOKIE_STARTER_BONUS
+                reasons.append("rookie who is already his team's starter - the "
+                               "kind of bet that wins a league")
+            else:
+                reasons.append("rookie with room to grow into a bigger role")
+        elif exp == 1:
+            delta += config.SECOND_YEAR_BONUS
+            reasons.append("second season, when players most often take a leap")
 
     return delta, reasons
 
 
 def build_board(players, projections, adp, scoring_settings=None, current_round=1,
-                byes=None):
+                byes=None, durability=None):
     """Assemble the full valuation board.
 
     Returns a list of player dicts sorted by adjusted VOR, each carrying the
@@ -249,6 +272,12 @@ def build_board(players, projections, adp, scoring_settings=None, current_round=
         elif byes.get(entry.get("team")):
             bye = byes[entry["team"]]
         entry["bye"] = bye
+
+        record = (durability or {}).get(pid)
+        if record:
+            entry["avg_games_missed"] = record.get("avg_missed")
+            entry["avg_games"] = record.get("avg_games")
+            entry["durability_seasons"] = record.get("seasons")
         board.append(entry)
 
     by_position = {}

@@ -48,6 +48,7 @@ class Assistant:
         self.adp = {}
         self.scoring_settings = None
         self.byes = {}
+        self.durability = {}
 
         self.user = None
         self.league = None
@@ -91,6 +92,8 @@ class Assistant:
             self.players = sleeper.cache_read(config.PLAYERS_CACHE, {}) or {}
             cached_proj = sleeper.cache_read(config.PROJECTIONS_CACHE, {}) or {}
             self.projections = cached_proj.get("players", cached_proj) or {}
+            cached_dur = sleeper.cache_read(config.DURABILITY_CACHE, {}) or {}
+            self.durability = cached_dur.get("players", cached_dur) or {}
             cached_adp = sleeper.cache_read(config.ADP_CACHE, {}) or {}
             self.adp = cached_adp.get("players", cached_adp) or {}
             self.byes = cached_adp.get("byes", {}) or {}
@@ -372,7 +375,8 @@ class Assistant:
             if self.board_round != current_round or not self.board:
                 self.board = valuation.build_board(
                     self.players, self.projections, self.adp,
-                    self.scoring_settings, current_round, self.byes)
+                    self.scoring_settings, current_round, self.byes,
+                    self.durability)
                 self.board_round = current_round
 
             slots_before = draftstate.slots_between(
@@ -488,6 +492,7 @@ class Assistant:
                     "projections": len(self.projections),
                     "adp": len(self.adp),
                     "adp_is_estimate": not bool(self.adp),
+                    "durability": len(self.durability),
                     "scoring_source": ("live league settings"
                                        if self.scoring_settings else "config.py"),
                     "last_poll": self.last_poll,
@@ -525,6 +530,8 @@ class Assistant:
             "tier": player.get("tier"),
             "pos_label": player.get("pos_label"),
             "injury_status": player.get("injury_status"),
+            "avg_games_missed": player.get("avg_games_missed"),
+            "years_exp": player.get("years_exp"),
             "estimated": player.get("estimated"),
             "drafted": player["player_id"] in taken,
         }

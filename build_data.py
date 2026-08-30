@@ -235,6 +235,78 @@ def build_estimate(players, league=None):
     return out
 
 
+def build_durability(players):
+    """Games played in prior seasons - a real stand-in for injury history.
+
+    Sleeper does not publish an injury history, but it does publish per-season
+    stats, and games played is the signal that matters: a projection quietly
+    assumes seventeen games, and a player who has managed twelve two years
+    running will not deliver it.
+    """
+    header("5. DURABILITY  (games played in prior seasons)")
+    try:
+        season = int(config.SEASON)
+    except ValueError:
+        season = 2026
+
+    seasons = [season - n for n in range(1, config.DURABILITY_SEASONS + 1)]
+    gathered = {}
+    for year in seasons:
+        rows, _ = sleeper.probe_projections(
+            str(year), candidates=sleeper.STATS_CANDIDATES, verbose=False)
+        if not rows:
+            print("  %s: no stats available" % year)
+            continue
+        counted = 0
+        for row in rows:
+            pid = row["player_id"]
+            if pid not in players:
+                continue
+            stats = scoring.normalize_stats(row["stats"])
+            games = stats.get("gp") or stats.get("games")
+            if games is None:
+                continue
+            gathered.setdefault(pid, {})[str(year)] = float(games)
+            counted += 1
+        print("  %s: games played for %d players" % (year, counted))
+
+    if not gathered:
+        print("  No prior-season stats reachable. Durability stays unknown, and")
+        print("  the app will not guess - no player is penalised for it.")
+        return None
+
+    out = {}
+    for pid, by_year in gathered.items():
+        values = list(by_year.values())
+        average = sum(values) / len(values)
+        missed = max(0.0, config.FULL_SEASON_GAMES - average)
+        out[pid] = {
+            "seasons": by_year,
+            "avg_games": round(average, 1),
+            "avg_missed": round(missed, 1),
+        }
+
+    print("  built durability for %d players" % len(out))
+    fragile = sorted(
+        [(v["avg_missed"], players[pid]["name"], players[pid]["position"], v)
+         for pid, v in out.items()
+         if v["avg_missed"] >= config.DURABILITY_MIN_GAMES_MISSED
+         and players[pid]["position"] in ("QB", "RB", "WR", "TE")],
+        reverse=True)
+    if fragile:
+        print("\n  Most games missed per season (these get penalised):")
+        for missed, name, position, record in fragile[:12]:
+            years = " ".join("%s:%.0f" % (y, g)
+                             for y, g in sorted(record["seasons"].items()))
+            print("     %-24s %-3s missed %4.1f/season   %s"
+                  % (name[:24], position, missed, years))
+
+    sleeper.cache_write(config.DURABILITY_CACHE, {
+        "players": out, "seasons": seasons, "updated_at": time.time()})
+    print("\n  cached -> %s" % config.DURABILITY_CACHE)
+    return out
+
+
 def _sample(by_player, players, scoring_settings, limit=8):
     scored = []
     for pid, record in by_player.items():
@@ -320,6 +392,8 @@ def main():
     if args.adp_file:
         load_paste_file(args.adp_file, players, "adp")
 
+    durability = build_durability(players)
+
     header("SUMMARY")
     have_adp = sleeper.cache_read(config.ADP_CACHE, {}) or {}
     print("  players      %d" % len(players))
@@ -327,6 +401,8 @@ def main():
     print("  adp          %s" % (len(have_adp.get("players", {})) or
                                  "none - app will estimate from Sleeper's ranking"))
     print("  league       %s" % ("resolved" if league else "NOT RESOLVED"))
+    print("  durability   %s" % (len(durability) if durability
+                                 else "unknown - nobody penalised for it"))
     print("\n  Next:  python3 app.py")
     if not proj:
         print("  Then paste a projections table in the Data panel before drafting.")

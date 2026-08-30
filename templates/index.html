@@ -614,6 +614,9 @@ function renderRec(s) {
       ${p.pos_label ? " · " + esc(p.pos_label) : ""}
       ${p.estimated ? ' · <span class="tag">ESTIMATED</span>' : ""}
       ${p.injury_status ? ' · <span class="tag">' + esc(p.injury_status) + "</span>" : ""}
+      ${p.avg_games_missed >= 1.5
+        ? ' · <span class="tag">MISSED ' + Math.round(p.avg_games_missed) + ' GAMES/YR</span>' : ""}
+      ${p.years_exp === 0 ? ' · <span class="badge">ROOKIE</span>' : ""}
     </div>`;
 
   if (t.tier_break) html += `<div class="alert warn" style="margin-top:12px">

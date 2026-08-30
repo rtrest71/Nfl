@@ -110,8 +110,37 @@ BASELINE_OVERRIDES = {}
 # Strategy knobs
 # ---------------------------------------------------------------------------
 
-# Round at which "balanced" flips from floor-weighted to upside-weighted.
-UPSIDE_CROSSOVER_ROUND = 7
+# Round at which the profile flips from floor-weighted to upside-weighted.
+# 60% of a 15-round draft conservative (rounds 1-9), 40% aggressive (10-15).
+UPSIDE_CROSSOVER_ROUND = 10
+
+# ---------------------------------------------------------------------------
+# Durability - the closest thing to injury history the free data supports
+#
+# Sleeper publishes a current injury status, not an injury history. What it
+# does publish is prior-season stats, and games played is a real signal: a back
+# who managed 11 of 17 games two years running is telling you something that a
+# projection assuming 17 games does not. Penalise the average games missed.
+# ---------------------------------------------------------------------------
+DURABILITY_SEASONS = 2            # prior seasons to look at
+FULL_SEASON_GAMES = 17
+DURABILITY_PENALTY_PER_GAME = 3.5  # points docked per game missed per season
+DURABILITY_MAX_PENALTY = 30.0
+DURABILITY_MIN_GAMES_MISSED = 1.5  # ignore noise; only flag a real pattern
+
+# Rookies have no history. That is unknown, not clean - never award them a
+# durability bonus for an empty record.
+
+# ---------------------------------------------------------------------------
+# Rookie upside - the aggressive 40%
+#
+# Only applied once the profile flips, and weighted toward rookies who are
+# ALREADY starting: a first-year player at the top of his depth chart is a real
+# bet, one buried behind two others is a lottery ticket with no ticket.
+# ---------------------------------------------------------------------------
+ROOKIE_UPSIDE_BONUS = 10.0        # rookie, any depth position
+ROOKIE_STARTER_BONUS = 9.0        # extra when he is already depth chart #1
+SECOND_YEAR_BONUS = 5.0           # year-two leaps are the other classic bet
 
 # Hard positional blocks (see spec section 5).
 QB_UNLOCK_ROUND = 8          # no QB recommendation before this round...
@@ -227,6 +256,7 @@ CACHE_DIR = os.path.join(BASE_DIR, "cache")
 TEMPLATE_DIR = os.path.join(BASE_DIR, "templates")
 
 PLAYERS_CACHE = os.path.join(CACHE_DIR, "players.json")
+DURABILITY_CACHE = os.path.join(CACHE_DIR, "durability.json")
 PROJECTIONS_CACHE = os.path.join(CACHE_DIR, "projections.json")
 ADP_CACHE = os.path.join(CACHE_DIR, "adp.json")
 LEAGUE_CACHE = os.path.join(CACHE_DIR, "league.json")
