@@ -384,6 +384,14 @@ class Assistant:
             needs = valuation.roster_needs(my_positions)
             picks_left = len(remaining)
 
+            # How many startable quarterbacks are actually left. This is what
+            # justifies waiting on the position - if the room drains it early,
+            # the block has to lift.
+            startable_qbs = [p for p in self.board
+                             if p["position"] == "QB"
+                             and p["player_id"] not in taken
+                             and p.get("vor", 0) > 0]
+
             state = {
                 "taken": taken,
                 "round": current_round,
@@ -401,6 +409,7 @@ class Assistant:
                 "needs": needs,
                 "picks_left": max(picks_left, 1),
                 "opponent_needs": opp_needs,
+                "startable_qbs_left": len(startable_qbs),
             }
 
             recommendation = valuation.recommend(self.board, state)
@@ -447,7 +456,15 @@ class Assistant:
                 # same as having run out of them.
                 "warnings": (self.warnings + (
                     draftstate.imbalance_warnings(my_roster_players, picks_left)
-                    if slot else [])),
+                    if slot else [])
+                    + ([("QUARTERBACKS ARE GOING EARLY - only %d startable ones "
+                         "left. The reason for waiting has gone, so a QB is now "
+                         "allowed before round %d."
+                         % (len(startable_qbs), config.QB_UNLOCK_ROUND))]
+                       if (slot and needs.get("QB", 0) > 0
+                           and current_round < config.QB_UNLOCK_ROUND
+                           and len(startable_qbs) <= config.QB_SCARCITY_UNLOCK)
+                       else [])),
                 "bye_conflicts": draftstate.bye_conflicts(my_roster_players, self.byes),
                 "runs": draftstate.detect_run(analysis["history"]),
                 "cliffs": draftstate.tier_cliff_alerts(self.board, taken),

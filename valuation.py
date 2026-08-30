@@ -389,7 +389,11 @@ def eligible(player, state):
             fallen = (player["adp"] is not None
                       and state["current_pick"] - player["adp"] >= config.QB_ELITE_ADP_FALL)
             elite = player["vor"] >= config.QB_ELITE_STEAL_VOR
-            if not (fallen and elite):
+            # Waiting only works while supply outruns demand. If the room is
+            # taking quarterbacks early, the reason for waiting has gone.
+            scarce = (state.get("startable_qbs_left", 99)
+                      <= config.QB_SCARCITY_UNLOCK)
+            if not (fallen and elite) and not scarce:
                 return False, ("only one QB starts in this league - wait until round %d"
                                % config.QB_UNLOCK_ROUND)
 

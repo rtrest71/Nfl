@@ -117,6 +117,12 @@ UPSIDE_CROSSOVER_ROUND = 7
 QB_UNLOCK_ROUND = 8          # no QB recommendation before this round...
 QB_ELITE_STEAL_VOR = 45.0    # ...unless an elite one has fallen this far past
 QB_ELITE_ADP_FALL = 12       # his ADP and still carries this much VOR.
+
+# ...or unless the room is actually running out of them. Waiting on quarterback
+# is right because supply exceeds demand - twelve starters for a whole league.
+# That logic fails if the other managers start taking them early, so the block
+# lifts once the startable supply gets thin, whatever the round.
+QB_SCARCITY_UNLOCK = 5       # startable QBs left on the board
 K_UNLOCK_ROUND = 14
 DEF_UNLOCK_ROUND = 14
 

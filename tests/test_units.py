@@ -202,6 +202,28 @@ class TestEligibility(unittest.TestCase):
         ok, _ = valuation.eligible(player, self._state(round=4, current_pick=40))
         self.assertTrue(ok)
 
+    def test_qb_block_lifts_when_the_room_drains_the_position(self):
+        """Waiting on QB is right only while supply outruns demand. A league-mate
+        who drafts QBs early breaks that, so the block has to notice."""
+        player = self._player(position="QB", vor=40.0, adp=30.0)
+
+        plenty = self._state(round=4, startable_qbs_left=99)
+        ok, reason = valuation.eligible(player, plenty)
+        self.assertFalse(ok)
+        self.assertIn("wait until round", reason)
+
+        scarce = self._state(round=4,
+                             startable_qbs_left=config.QB_SCARCITY_UNLOCK)
+        ok, _ = valuation.eligible(player, scarce)
+        self.assertTrue(ok, "QB still blocked with the position running out")
+
+    def test_scarcity_never_justifies_a_second_quarterback(self):
+        player = self._player(position="QB", vor=40.0, adp=30.0)
+        state = self._state(round=4, my_roster=["QB"], startable_qbs_left=1)
+        ok, reason = valuation.eligible(player, state)
+        self.assertFalse(ok)
+        self.assertIn("already have", reason)
+
     def test_kicker_and_defense_blocked_until_round_fourteen(self):
         for pos in ("K", "DEF"):
             ok, _ = valuation.eligible(self._player(position=pos), self._state(round=10))
