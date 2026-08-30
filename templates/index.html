@@ -869,8 +869,18 @@ document.querySelectorAll("#pool th[data-k]").forEach(th => {
 ["fPos", "fName", "fAvail"].forEach(id =>
   $(id).addEventListener("input", () => { if (STATE) renderPool(STATE); }));
 
-poll();
-setInterval(poll, 2000);
+// Poll faster as your turn approaches. The server already does this; matching
+// it here keeps the page from sitting on a stale board for a second longer
+// than it has to when the clock is the thing you are watching.
+function scheduleNext() {
+  let wait = 1000;
+  if (STATE && STATE.me) {
+    const until = STATE.me.picks_until_me;
+    if (STATE.me.on_the_clock || (until !== null && until <= 3)) wait = 500;
+  }
+  setTimeout(function () { poll().finally(scheduleNext); }, wait);
+}
+poll().finally(scheduleNext);
 </script>
 </body>
 </html>
