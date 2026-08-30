@@ -302,18 +302,29 @@ def build_board(players, projections, adp, scoring_settings=None, current_round=
             entry["adp_estimated"] = True
 
     # Value gap: where the market has him versus where his production says.
-    vor_order = sorted(board, key=lambda e: e["vor"], reverse=True)
-    for rank, entry in enumerate(vor_order, start=1):
-        entry["vor_rank"] = rank
-    adp_order = sorted([e for e in board if e["adp"] is not None],
-                       key=lambda e: e["adp"])
-    for rank, entry in enumerate(adp_order, start=1):
-        entry["adp_rank"] = rank
+    #
+    # Both ranks are computed within the DRAFTABLE pool only. Ranking across
+    # every player in the database made the gap meaningless - a kicker with an
+    # ADP in the thousands scored +2900 and saturated the value boost, which
+    # said nothing except "nobody drafts this player".
+    draftable = [e for e in board
+                 if e["adp"] is not None and e["adp"] <= config.VALUE_GAP_ADP_LIMIT]
+
     for entry in board:
-        if entry.get("adp_rank"):
-            entry["value_gap"] = entry["adp_rank"] - entry["vor_rank"]
-        else:
-            entry["value_gap"] = 0
+        entry["draftable"] = False
+        entry["value_gap"] = 0
+        entry["vor_rank"] = None
+        entry["adp_rank"] = None
+
+    for rank, entry in enumerate(
+            sorted(draftable, key=lambda e: e["vor"], reverse=True), start=1):
+        entry["vor_rank"] = rank
+        entry["draftable"] = True
+    for rank, entry in enumerate(
+            sorted(draftable, key=lambda e: e["adp"]), start=1):
+        entry["adp_rank"] = rank
+    for entry in draftable:
+        entry["value_gap"] = entry["adp_rank"] - entry["vor_rank"]
 
     for entry in board:
         delta, reasons = risk_adjustment(entry, current_round)
@@ -626,8 +637,12 @@ def value_board(board, state, limit=15):
     """
     available = [p for p in board
                  if p["player_id"] not in state["taken"]
+                 and p.get("draftable")
                  and p.get("value_gap", 0) > 0
-                 and p.get("points", 0) > 0]
+                 and p.get("points", 0) > 0
+                 # A bargain you would never start is not a bargain.
+                 and p.get("vor", 0) > 0
+                 and p["position"] not in ("K", "DEF")]
     available.sort(key=lambda p: (p["value_gap"], p["vor"]), reverse=True)
     return available[:limit]
 

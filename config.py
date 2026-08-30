@@ -84,8 +84,15 @@ SCORING = {
     "st_player_fum_rec": 1.0,
     # MISC
     "fum_lost": -2.0,
+    "fum": 0.0,          # all fumbles, scored separately from fumbles LOST.
+                         # Sleeper treats these as two different stats; leave at
+                         # 0 unless your league's live settings say otherwise.
     "fum_rec_td": 6.0,
 }
+
+# Set these only to override what Sleeper reports. Leave as None normally.
+DRAFT_ID_OVERRIDE = None     # force a specific draft_id if the league has several
+ROUNDS_OVERRIDE = None       # force the round count if the draft object is wrong
 
 # ---------------------------------------------------------------------------
 # VOR baselines
@@ -147,6 +154,13 @@ HANDCUFF_BLOCK_ROUND = 12    # never recommend a pure backup before this round
 # to this fraction. This is what stops the engine drafting a sixth running back
 # ahead of your first receiver in a league that starts seven RB/WR/TE.
 BENCH_VALUE_MULTIPLIER = 0.45
+
+# The value gap compares where the market drafts a player against where his
+# production ranks him. It is only meaningful among players who are actually
+# drafted: a kicker nobody takes until pick 3000 is not "a bargain", he is
+# irrelevant. Rank both sides within this ADP window so the number means
+# something - roughly the draft's 180 picks plus a healthy margin.
+VALUE_GAP_ADP_LIMIT = 260
 
 # Value-gap boost: how many points per round of positive (ADP rank - VOR rank).
 VALUE_GAP_POINTS_PER_PICK = 0.22

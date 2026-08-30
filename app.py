@@ -31,10 +31,13 @@ import valuation
 class Assistant:
     """All mutable draft state, behind one lock."""
 
-    def __init__(self, offline=False, slot_override=None):
+    def __init__(self, offline=False, slot_override=None, draft_id_override=None,
+                 rounds_override=None):
         self.lock = threading.RLock()
         self.offline = offline
         self.slot_override = slot_override
+        self.draft_id_override = draft_id_override or config.DRAFT_ID_OVERRIDE
+        self.rounds_override = rounds_override or config.ROUNDS_OVERRIDE
 
         self.players = {}
         self.index = None
@@ -126,7 +129,14 @@ class Assistant:
                     % (config.LEAGUE_NAME, config.USERNAME, names or "none"))
 
             drafts = sleeper.get_drafts(league["league_id"])
-            draft = drafts[0] if drafts else None
+            draft, others = sleeper.pick_draft(drafts, draft_id=self.draft_id_override)
+            for other in others:
+                self.log("ignoring other draft: %s" % sleeper.describe_draft(other))
+            if others:
+                self.warnings.append(
+                    "This league has %d drafts. Using %s. If that is the wrong "
+                    "one, restart with --draft-id <id>."
+                    % (len(others) + 1, sleeper.describe_draft(draft)))
             users = {u["user_id"]: (u.get("display_name") or u.get("username"))
                      for u in (sleeper.get_league_users(league["league_id"]) or [])}
 
@@ -220,9 +230,28 @@ class Assistant:
     def draft_shape(self):
         draft = self.draft or {}
         settings = draft.get("settings") or {}
+        rounds = int(settings.get("rounds") or config.ROUNDS)
+
+        # A wrong round count is silently catastrophic: it would compute only a
+        # few of my pick numbers and think the draft ends early. Never accept a
+        # count that cannot seat a legal roster without saying so loudly.
+        override = self.rounds_override or config.ROUNDS_OVERRIDE
+        if override:
+            rounds = int(override)
+        elif rounds < config.ROSTER_SIZE:
+            message = (
+                "The draft object says %d rounds, but your roster needs %d "
+                "players. Using %d. If the live draft really is %d rounds, "
+                "restart with --rounds %d."
+                % (rounds, config.ROSTER_SIZE, config.ROUNDS, rounds, rounds))
+            if message not in self.warnings:
+                self.warnings.append(message)
+                self.log(message)
+            rounds = config.ROUNDS
+
         return {
             "teams": int(settings.get("teams") or config.TEAMS),
-            "rounds": int(settings.get("rounds") or config.ROUNDS),
+            "rounds": rounds,
             "type": draft.get("type") or config.DRAFT_TYPE,
             "reversal_round": int(settings.get("reversal_round") or 0),
         }
@@ -349,9 +378,12 @@ class Assistant:
                 "recommendation": self._serialise_recommendation(recommendation),
                 "roster": draftstate.roster_report(my_roster_players),
                 "roster_players": my_roster_players,
-                "warnings": (self.warnings
-                             + draftstate.imbalance_warnings(my_roster_players,
-                                                             picks_left)),
+                # Roster-completion warnings are meaningless until the draft
+                # order exists: with no slot I own no picks, which is not the
+                # same as having run out of them.
+                "warnings": (self.warnings + (
+                    draftstate.imbalance_warnings(my_roster_players, picks_left)
+                    if slot else [])),
                 "bye_conflicts": draftstate.bye_conflicts(my_roster_players, self.byes),
                 "runs": draftstate.detect_run(analysis["history"]),
                 "cliffs": draftstate.tier_cliff_alerts(self.board, taken),
@@ -737,10 +769,16 @@ def main():
                         help="Do not call Sleeper; run entirely off cache.")
     parser.add_argument("--slot", type=int, default=None,
                         help="Force your draft slot (1-12) if auto-detection fails.")
+    parser.add_argument("--draft-id", default=None,
+                        help="Use a specific draft if the league has several.")
+    parser.add_argument("--rounds", type=int, default=None,
+                        help="Force the round count if the draft object is wrong.")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
 
-    assistant = Assistant(offline=args.offline, slot_override=args.slot)
+    assistant = Assistant(offline=args.offline, slot_override=args.slot,
+                          draft_id_override=args.draft_id,
+                          rounds_override=args.rounds)
     assistant.load_cached_data()
     assistant.resolve_league()
     assistant.poll_once()

@@ -203,22 +203,96 @@ def verify_league_settings(league):
     return warnings
 
 
+# Sleeper's own scoring keys that spell one of our stats differently. This map
+# is deliberately explicit and one-directional: it must NEVER merge two distinct
+# Sleeper stats onto the same key. In particular `fum` (all fumbles) and
+# `fum_lost` (fumbles lost) are different stats and are both kept.
+SLEEPER_SCORING_KEYMAP = {
+    "fgmiss": "fg_miss",
+    "fgmiss_0_19": "fg_miss", "fgmiss_20_29": "fg_miss",
+    "fgmiss_30_39": "fg_miss", "fgmiss_40_49": "fg_miss",
+    "fgmiss_50p": "fg_miss",
+    "xpmiss": "xp_miss",
+    "fgm_50p": "fgm_50_59",
+    "fgm_60p": "fgm_60_plus",
+    "safe": "safety",
+    "ff": "forced_fumble",
+    "blk_kick": "blocked_kick",
+    "st_ff": "st_forced_fumble",
+    "pts_allow_35p": "pts_allow_35_plus",
+}
+
+
 def live_scoring_settings(league):
-    """Return the league's live scoring settings mapped to our canonical keys.
+    """Return the league's live scoring settings, keyed the way we score.
 
-    The spec's table is authoritative, but if Sleeper reports something
-    different we would rather score off reality than off a transcription.
+    The spec's table is a hand transcription; the live league is the truth. We
+    take Sleeper's keys almost verbatim, translating only the handful it spells
+    differently. We deliberately do NOT run these through the paste-table alias
+    table: that one maps a column headed "FUM" onto fumbles lost, which is right
+    for a third-party CSV and wrong for Sleeper, where `fum` and `fum_lost` are
+    separate stats that would collide onto one key.
     """
-    import scoring as scoring_mod
-
     raw = (league or {}).get("scoring_settings") or {}
     out = {}
     for key, value in raw.items():
+        name = str(key).strip().lower()
+        name = SLEEPER_SCORING_KEYMAP.get(name, name)
         try:
-            out[scoring_mod.canonical_stat(key)] = float(value)
+            value = float(value)
         except (TypeError, ValueError):
             continue
+        # Several Sleeper keys can fold onto one of ours (the fgmiss family).
+        # Keep the largest magnitude rather than letting dict order decide.
+        if name in out and abs(out[name]) >= abs(value):
+            continue
+        out[name] = value
     return out
+
+
+DRAFT_STATUS_RANK = {"drafting": 0, "paused": 1, "pre_draft": 2, "complete": 3}
+
+
+def pick_draft(drafts, rounds=None, draft_id=None):
+    """Choose the real draft when a league has several.
+
+    Leagues often carry leftover or test drafts, and taking drafts[0] blindly
+    picks whichever the API happens to list first - which can be a 3-round
+    practice draft. Prefer, in order: an explicitly requested id, a draft that
+    is live or upcoming, one whose round count matches the league, and finally
+    the most recently created.
+
+    Returns (chosen, others).
+    """
+    drafts = [d for d in (drafts or []) if isinstance(d, dict)]
+    if not drafts:
+        return None, []
+
+    draft_id = draft_id or config.DRAFT_ID_OVERRIDE
+    if draft_id:
+        for draft in drafts:
+            if str(draft.get("draft_id")) == str(draft_id):
+                return draft, [d for d in drafts if d is not draft]
+
+    rounds = rounds or config.ROUNDS
+
+    def sort_key(draft):
+        settings = draft.get("settings") or {}
+        status_rank = DRAFT_STATUS_RANK.get(draft.get("status"), 4)
+        matches_rounds = 0 if int(settings.get("rounds") or 0) == rounds else 1
+        matches_teams = 0 if int(settings.get("teams") or 0) == config.TEAMS else 1
+        created = draft.get("start_time") or draft.get("created") or 0
+        return (status_rank, matches_rounds, matches_teams, -int(created or 0))
+
+    ordered = sorted(drafts, key=sort_key)
+    return ordered[0], ordered[1:]
+
+
+def describe_draft(draft):
+    settings = (draft or {}).get("settings") or {}
+    return "%s  status=%s type=%s teams=%s rounds=%s" % (
+        (draft or {}).get("draft_id"), (draft or {}).get("status"),
+        (draft or {}).get("type"), settings.get("teams"), settings.get("rounds"))
 
 
 # ---------------------------------------------------------------------------

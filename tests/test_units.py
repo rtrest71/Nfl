@@ -10,6 +10,7 @@ import config
 import draftstate
 import projections as paste
 import scoring
+import sleeper
 import valuation
 
 
@@ -424,6 +425,119 @@ class TestPasteParsing(unittest.TestCase):
         parsed, report = paste.apply_projection_paste("", self.players)
         self.assertEqual(parsed, {})
         self.assertEqual(report["parsed"], 0)
+
+
+class TestLiveScoringSettings(unittest.TestCase):
+    """Regression: Sleeper's own keys must not collide through paste aliases."""
+
+    def test_fum_and_fum_lost_stay_separate(self):
+        league = {"scoring_settings": {"fum": -1.0, "fum_lost": -2.0}}
+        live = sleeper.live_scoring_settings(league)
+        self.assertEqual(live["fum"], -1.0)
+        self.assertEqual(live["fum_lost"], -2.0)
+
+    def test_zero_valued_setting_is_kept_not_dropped(self):
+        """A league that scores fumbles at 0 must override the config's -2."""
+        league = {"scoring_settings": {"fum_lost": 0.0, "rec": 1.0}}
+        live = sleeper.live_scoring_settings(league)
+        self.assertIn("fum_lost", live)
+        self.assertEqual(live["fum_lost"], 0.0)
+        merged = dict(config.SCORING)
+        merged.update(live)
+        self.assertEqual(merged["fum_lost"], 0.0)
+        self.assertEqual(scoring.fantasy_points({"fum_lost": 3}, "RB", merged), 0.0)
+
+    def test_sleeper_spellings_are_translated(self):
+        league = {"scoring_settings": {"safe": 2.0, "ff": 1.0, "blk_kick": 2.0,
+                                       "fgmiss": -1.0, "pts_allow_35p": -4.0}}
+        live = sleeper.live_scoring_settings(league)
+        self.assertEqual(live["safety"], 2.0)
+        self.assertEqual(live["forced_fumble"], 1.0)
+        self.assertEqual(live["blocked_kick"], 2.0)
+        self.assertEqual(live["fg_miss"], -1.0)
+        self.assertEqual(live["pts_allow_35_plus"], -4.0)
+
+
+class TestDraftSelection(unittest.TestCase):
+    """Regression: taking drafts[0] blindly picked a 3-round practice draft."""
+
+    def _draft(self, did, status, rounds, teams=12, created=0):
+        return {"draft_id": did, "status": status, "created": created,
+                "settings": {"rounds": rounds, "teams": teams}}
+
+    def test_prefers_the_draft_matching_the_league_shape(self):
+        drafts = [self._draft("practice", "pre_draft", 3),
+                  self._draft("real", "pre_draft", 15)]
+        chosen, others = sleeper.pick_draft(drafts)
+        self.assertEqual(chosen["draft_id"], "real")
+        self.assertEqual(len(others), 1)
+
+    def test_prefers_a_live_draft_over_a_completed_one(self):
+        drafts = [self._draft("old", "complete", 15),
+                  self._draft("live", "drafting", 15)]
+        chosen, _ = sleeper.pick_draft(drafts)
+        self.assertEqual(chosen["draft_id"], "live")
+
+    def test_explicit_id_wins(self):
+        drafts = [self._draft("a", "drafting", 15), self._draft("b", "pre_draft", 3)]
+        chosen, others = sleeper.pick_draft(drafts, draft_id="b")
+        self.assertEqual(chosen["draft_id"], "b")
+        self.assertEqual(len(others), 1)
+
+    def test_empty_list_is_safe(self):
+        chosen, others = sleeper.pick_draft([])
+        self.assertIsNone(chosen)
+        self.assertEqual(others, [])
+
+
+class TestValueGapScoping(unittest.TestCase):
+    """Regression: value gap ranked across all 3300 players, so an undrafted
+    kicker scored +2978 and saturated the value boost."""
+
+    def _board(self):
+        players, projections, adp = {}, {}, {}
+        # 60 real draftable players plus deep players nobody drafts.
+        for i in range(60):
+            pid = "p%d" % i
+            players[pid] = {"player_id": pid, "name": "Player %d" % i,
+                            "position": ["RB", "WR"][i % 2], "team": "XXX",
+                            "age": 25, "depth_chart_order": 1, "search_rank": i}
+            projections[pid] = {"stats": {"rec": 80 - i, "rec_yd": 1200 - i * 12,
+                                          "rec_td": 8}}
+            adp[pid] = {"adp": float(i + 1)}
+        for i in range(20):
+            pid = "deep%d" % i
+            players[pid] = {"player_id": pid, "name": "Deep %d" % i,
+                            "position": "K", "team": "XXX", "age": 28,
+                            "depth_chart_order": 1, "search_rank": 3000 + i}
+            projections[pid] = {"stats": {"xpm": 20, "fgm_30_39": 5}}
+            adp[pid] = {"adp": float(2500 + i)}
+        return valuation.build_board(players, projections, adp, current_round=1)
+
+    def test_players_beyond_the_draft_get_no_value_gap(self):
+        board = self._board()
+        deep = [p for p in board if p["player_id"].startswith("deep")]
+        self.assertTrue(deep)
+        for player in deep:
+            self.assertEqual(player["value_gap"], 0,
+                             "%s scored a value gap despite being undraftable"
+                             % player["name"])
+            self.assertFalse(player["draftable"])
+
+    def test_value_gap_stays_within_a_sane_range(self):
+        board = self._board()
+        for player in board:
+            self.assertLess(abs(player["value_gap"]), 200,
+                            "%s has an absurd value gap of %d"
+                            % (player["name"], player["value_gap"]))
+
+    def test_value_board_excludes_kickers_and_undraftables(self):
+        board = self._board()
+        state = {"taken": set()}
+        for player in valuation.value_board(board, state):
+            self.assertNotIn(player["position"], ("K", "DEF"))
+            self.assertTrue(player["draftable"])
+            self.assertGreater(player["vor"], 0)
 
 
 class TestRunsAndWarnings(unittest.TestCase):
