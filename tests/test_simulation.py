@@ -45,7 +45,8 @@ def synthetic_board():
     return board
 
 
-SHAPE = {"teams": 12, "rounds": 15, "type": "snake", "reversal_round": 0}
+SHAPE = {"teams": config.TEAMS, "rounds": config.ROUNDS,
+         "type": "snake", "reversal_round": 0}
 
 
 class TestOptimalLineup(unittest.TestCase):
@@ -59,16 +60,20 @@ class TestOptimalLineup(unittest.TestCase):
         ]
         total, chosen, unfilled = simulation.optimal_lineup(roster)
         self.assertEqual(unfilled, 0)
-        self.assertEqual(len(chosen), 10)
-        # Flex takes the two best leftovers: WR3 (210) and RB3 (180).
-        expected = 300 + 250 + 200 + 240 + 220 + 190 + 140 + 150 + 210 + 180
+                # Flex takes the two best leftovers: WR3 (210) and RB3 (180).
+        # mandatory slots plus however many flex slots the league has
+        mandatory = 300 + 250 + 200 + 240 + 220 + 190 + 140 + 150
+        leftovers = [210, 180]
+        expected = mandatory + sum(leftovers[:config.FLEX_SLOTS])
         self.assertAlmostEqual(total, expected, places=1)
+        self.assertEqual(len(chosen),
+                         sum(config.STARTERS.values()) + config.FLEX_SLOTS)
 
     def test_reports_unfilled_slots(self):
         roster = [player("r1", "RB", 250, 5), player("r2", "RB", 200, 15)]
         total, _, unfilled = simulation.optimal_lineup(roster)
-        # QB, 2 WR, TE, K, DEF and 2 flex are all empty.
-        self.assertEqual(unfilled, 8)
+        # QB, 2 WR, TE, K, DEF and every flex slot are empty.
+        self.assertEqual(unfilled, 6 + config.FLEX_SLOTS)
         self.assertAlmostEqual(total, 450.0, places=1)
 
     def test_bench_players_contribute_nothing(self):
@@ -106,10 +111,10 @@ class TestSimulationRules(unittest.TestCase):
             simulation.optimal_lineup = original
         return captured["roster"]
 
-    def test_drafts_a_full_fifteen_and_never_forfeits_a_pick(self):
+    def test_drafts_every_round_and_never_forfeits_a_pick(self):
         for slot in (1, 5, 12):
             roster = self._one_roster(slot=slot)
-            self.assertEqual(len(roster), 15,
+            self.assertEqual(len(roster), config.ROUNDS,
                              "slot %d drafted %d players" % (slot, len(roster)))
 
     def test_always_fields_a_legal_lineup(self):
@@ -140,16 +145,18 @@ class TestSimulationRules(unittest.TestCase):
         """The sim's hard blocks must match valuation.eligible, not drift."""
         ctx = simulation.Context(self.board, self.state, SHAPE, 7, {}, [])
         checks = [
-            ("QB", 3, {}, False), ("QB", 8, {}, True),
-            ("QB", 10, {"QB": 1}, False),
-            ("K", 10, {}, False), ("K", 14, {}, True),
-            ("DEF", 13, {}, False), ("DEF", 14, {}, True),
+            ("QB", 3, {}, False),
+            ("QB", config.QB_UNLOCK_ROUND, {}, True),
+            ("QB", config.QB_UNLOCK_ROUND + 2, {"QB": 1}, False),
+            ("K", 10, {}, False), ("K", config.K_UNLOCK_ROUND, {}, True),
+            ("DEF", config.DEF_UNLOCK_ROUND - 1, {}, False),
+            ("DEF", config.DEF_UNLOCK_ROUND, {}, True),
             ("RB", 5, {}, True),
         ]
         for position, round_no, counts, expected in checks:
             index = next(i for i in range(ctx.size) if ctx.position[i] == position)
             sim_says = simulation._my_allowed(
-                ctx, index, round_no, counts, picks_left=15,
+                ctx, index, round_no, counts, picks_left=config.ROUNDS,
                 needs_left=simulation._needs_left(counts))
 
             roster = []
@@ -158,7 +165,7 @@ class TestSimulationRules(unittest.TestCase):
             state = {
                 "taken": set(), "round": round_no, "current_pick": 1,
                 "my_roster": roster, "needs": valuation.roster_needs(roster),
-                "picks_left": 15, "opponent_needs": {},
+                "picks_left": config.ROUNDS, "opponent_needs": {},
                 "my_next_pick": None, "my_remaining_picks": [],
             }
             candidate = dict(self.board[0])

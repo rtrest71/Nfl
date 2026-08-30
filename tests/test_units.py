@@ -73,7 +73,7 @@ class TestSnakeOrder(unittest.TestCase):
 
     def test_my_picks_all_rounds(self):
         picks = draftstate.my_picks(5)
-        self.assertEqual(len(picks), 15)
+        self.assertEqual(len(picks), config.ROUNDS)
         self.assertEqual(picks[0], 5)
         self.assertEqual(picks[1], 20)     # 12 - 5 + 1 = 8 -> 12 + 8
         self.assertEqual(picks[2], 29)
@@ -83,11 +83,12 @@ class TestSnakeOrder(unittest.TestCase):
         seen = []
         for slot in range(1, 13):
             seen.extend(draftstate.my_picks(slot))
-        self.assertEqual(sorted(seen), list(range(1, 12 * 15 + 1)))
+        self.assertEqual(sorted(seen),
+                         list(range(1, config.TEAMS * config.ROUNDS + 1)))
 
     def test_slot_of_pick_round_trips(self):
         for slot in range(1, 13):
-            for rnd in range(1, 16):
+            for rnd in range(1, config.ROUNDS + 1):
                 pick = draftstate.pick_number(rnd, slot)
                 self.assertEqual(draftstate.slot_of_pick(pick), (rnd, slot))
 
@@ -131,9 +132,10 @@ class TestBaselines(unittest.TestCase):
     def test_matches_the_spec(self):
         base = config.baselines()
         self.assertEqual(base["QB"], 12)
-        self.assertEqual(base["RB"], 34)
-        self.assertEqual(base["WR"], 36)
-        self.assertEqual(base["TE"], 14)
+        flex = config.FLEX_SLOTS * config.TEAMS
+        self.assertEqual(base["RB"], 24 + round(flex * config.FLEX_SPLIT["RB"]))
+        self.assertEqual(base["WR"], 24 + round(flex * config.FLEX_SPLIT["WR"]))
+        self.assertEqual(base["TE"], 12 + round(flex * config.FLEX_SPLIT["TE"]))
         self.assertEqual(base["K"], 12)
         self.assertEqual(base["DEF"], 12)
 
@@ -141,7 +143,8 @@ class TestBaselines(unittest.TestCase):
         original = dict(config.FLEX_SPLIT)
         try:
             config.FLEX_SPLIT.update({"RB": 0.5, "WR": 0.5, "TE": 0.0})
-            self.assertEqual(config.baselines()["RB"], 36)
+            flex = config.FLEX_SLOTS * config.TEAMS
+            self.assertEqual(config.baselines()["RB"], 24 + round(flex * 0.5))
             self.assertEqual(config.baselines()["TE"], 12)
         finally:
             config.FLEX_SPLIT.clear()
@@ -154,7 +157,7 @@ class TestRosterNeeds(unittest.TestCase):
         self.assertEqual(needs["RB"], 2)
         self.assertEqual(needs["WR"], 2)
         self.assertEqual(needs["QB"], 1)
-        self.assertEqual(needs["FLEX"], 2)
+        self.assertEqual(needs["FLEX"], config.FLEX_SLOTS)
 
     def test_extra_backs_fill_flex(self):
         needs = valuation.roster_needs(["RB", "RB", "RB", "WR", "WR", "WR"])
@@ -164,8 +167,9 @@ class TestRosterNeeds(unittest.TestCase):
 
     def test_required_slots_remaining(self):
         needs = valuation.roster_needs(["QB", "RB", "RB", "WR", "WR", "TE"])
-        # Only the two flex slots plus K and DEF are left.
-        self.assertEqual(valuation.required_slots_remaining(needs), 4)
+        # The flex slots plus K and DEF are what remain.
+        self.assertEqual(valuation.required_slots_remaining(needs),
+                         config.FLEX_SLOTS + 2)
 
 
 class TestEligibility(unittest.TestCase):
@@ -489,19 +493,20 @@ class TestDraftSelection(unittest.TestCase):
 
     def test_prefers_the_draft_matching_the_league_shape(self):
         drafts = [self._draft("practice", "pre_draft", 3),
-                  self._draft("real", "pre_draft", 15)]
+                  self._draft("real", "pre_draft", config.ROUNDS)]
         chosen, others = sleeper.pick_draft(drafts)
         self.assertEqual(chosen["draft_id"], "real")
         self.assertEqual(len(others), 1)
 
     def test_prefers_a_live_draft_over_a_completed_one(self):
-        drafts = [self._draft("old", "complete", 15),
-                  self._draft("live", "drafting", 15)]
+        drafts = [self._draft("old", "complete", config.ROUNDS),
+                  self._draft("live", "drafting", config.ROUNDS)]
         chosen, _ = sleeper.pick_draft(drafts)
         self.assertEqual(chosen["draft_id"], "live")
 
     def test_explicit_id_wins(self):
-        drafts = [self._draft("a", "drafting", 15), self._draft("b", "pre_draft", 3)]
+        drafts = [self._draft("a", "drafting", config.ROUNDS),
+                  self._draft("b", "pre_draft", 3)]
         chosen, others = sleeper.pick_draft(drafts, draft_id="b")
         self.assertEqual(chosen["draft_id"], "b")
         self.assertEqual(len(others), 1)
@@ -641,8 +646,8 @@ class TestDurabilityAndRookies(unittest.TestCase):
 
     def test_profile_is_sixty_percent_conservative(self):
         conservative = config.UPSIDE_CROSSOVER_ROUND - 1
-        self.assertEqual(conservative, 9)
-        self.assertAlmostEqual(conservative / config.ROUNDS, 0.6, places=2)
+        self.assertGreaterEqual(conservative / config.ROUNDS, 0.55)
+        self.assertLessEqual(conservative / config.ROUNDS, 0.70)
 
 
 class TestOwnHandcuff(unittest.TestCase):

@@ -118,7 +118,7 @@ class MockDraftTest(unittest.TestCase):
         self.assertTrue(snap["me"]["slot_known"])
         self.assertEqual(snap["me"]["slot"], self.MY_SLOT)
         # Every pick number for all 15 rounds, recomputed immediately.
-        self.assertEqual(len(snap["me"]["my_picks"]), 15)
+        self.assertEqual(len(snap["me"]["my_picks"]), config.ROUNDS)
         self.assertEqual(snap["me"]["my_picks"][0], self.MY_SLOT)
         self.assertEqual(snap["me"]["my_picks"][1], 24 - self.MY_SLOT + 1)
         self.assertEqual(snap["me"]["picks_until_me"], self.MY_SLOT - 1)
@@ -166,7 +166,7 @@ class MockDraftTest(unittest.TestCase):
         window = pool[:max(1, min(6, len(pool)))]
         return rng.choice(window)
 
-    def test_04_full_fifteen_round_draft(self):
+    def test_04_full_draft(self):
         rng = random.Random(11)
         self.server.picks = []
         self.server.draft_order = {fake_sleeper.USER_ID: self.MY_SLOT}
@@ -181,7 +181,7 @@ class MockDraftTest(unittest.TestCase):
         taken = set()
         my_picks_log = []
 
-        for pick_no in range(1, 12 * 15 + 1):
+        for pick_no in range(1, config.TEAMS * config.ROUNDS + 1):
             round_no, slot = draftstate.slot_of_pick(pick_no)
             snap = assistant.snapshot
 
@@ -208,8 +208,11 @@ class MockDraftTest(unittest.TestCase):
                         round_no, config.QB_UNLOCK_ROUND,
                         "recommended a QB in round %d" % round_no)
                 if player["position"] in ("K", "DEF"):
+                    unlock = (config.K_UNLOCK_ROUND
+                              if player["position"] == "K"
+                              else config.DEF_UNLOCK_ROUND)
                     self.assertGreaterEqual(
-                        round_no, config.K_UNLOCK_ROUND,
+                        round_no, unlock,
                         "recommended a %s in round %d"
                         % (player["position"], round_no))
 
@@ -233,15 +236,17 @@ class MockDraftTest(unittest.TestCase):
         self._assert_legal_roster(rosters[self.MY_SLOT], my_picks_log)
 
         final = assistant.snapshot
-        self.assertEqual(final["draft"]["picks_made"], 180)
-        self.assertEqual(len(final["roster_players"]), 15)
+        self.assertEqual(final["draft"]["picks_made"],
+                         config.TEAMS * config.ROUNDS)
+        self.assertEqual(len(final["roster_players"]), config.ROUNDS)
 
     def _assert_legal_roster(self, roster, log):
         counts = {}
         for pos in roster:
             counts[pos] = counts.get(pos, 0) + 1
 
-        self.assertEqual(len(roster), 15, "roster is not 15 players: %s" % counts)
+        self.assertEqual(len(roster), config.ROUNDS,
+                         "roster is not %d players: %s" % (config.ROUNDS, counts))
 
         # Every starting slot must be fillable.
         needs = valuation.roster_needs(roster)
@@ -258,17 +263,23 @@ class MockDraftTest(unittest.TestCase):
 
         # Full PPR with two flex slots: load up on pass catchers.
         catchers = counts.get("WR", 0) + counts.get("TE", 0) + counts.get("RB", 0)
-        self.assertGreaterEqual(catchers, 12,
+        skill_starters = (config.STARTERS["RB"] + config.STARTERS["WR"]
+                          + config.STARTERS["TE"] + config.FLEX_SLOTS)
+        self.assertGreaterEqual(catchers, skill_starters + 3,
                                 "too few RB/WR/TE for a 7-starter league: %s" % counts)
-        self.assertGreaterEqual(counts.get("WR", 0), 4,
-                                "full PPR league needs receivers: %s" % counts)
+        # At least your starters plus one spare. With one flex slot that is
+        # three; with two it would be four.
+        self.assertGreaterEqual(
+            counts.get("WR", 0), config.STARTERS["WR"] + 1,
+            "full PPR league needs receivers: %s" % counts)
 
         qb_round = [r for r, pos, _ in log if pos == "QB"]
         self.assertTrue(qb_round and qb_round[0] >= config.QB_UNLOCK_ROUND,
                         "took a QB in round %s" % qb_round)
-        for pos in ("K", "DEF"):
+        for pos, unlock in (("K", config.K_UNLOCK_ROUND),
+                            ("DEF", config.DEF_UNLOCK_ROUND)):
             rounds = [r for r, p, _ in log if p == pos]
-            self.assertTrue(rounds and rounds[0] >= 14,
+            self.assertTrue(rounds and rounds[0] >= unlock,
                             "took a %s in round %s" % (pos, rounds))
 
     # -- resilience -------------------------------------------------------
@@ -505,8 +516,9 @@ class MockDraftTest(unittest.TestCase):
                                   top["player"]["position"]))
 
         snap = assistant.snapshot
-        self.assertEqual(snap["draft"]["picks_made"], 180)
-        self.assertEqual(len(snap["roster_players"]), 15)
+        self.assertEqual(snap["draft"]["picks_made"],
+                         config.TEAMS * config.ROUNDS)
+        self.assertEqual(len(snap["roster_players"]), config.ROUNDS)
         empty = [s["slot"] for s in snap["roster"]["slots"]
                  if not s["filled"] and s["slot"] != "BN"]
         self.assertFalse(empty, "practice draft left starting slots empty: %s" % empty)
@@ -516,7 +528,9 @@ class MockDraftTest(unittest.TestCase):
             if position == "QB":
                 self.assertGreaterEqual(round_no, config.QB_UNLOCK_ROUND)
             if position in ("K", "DEF"):
-                self.assertGreaterEqual(round_no, config.K_UNLOCK_ROUND)
+                self.assertGreaterEqual(
+                    round_no, config.K_UNLOCK_ROUND if position == "K"
+                    else config.DEF_UNLOCK_ROUND)
 
     def test_14_practice_rejects_drafting_out_of_turn(self):
         import app
@@ -564,8 +578,10 @@ class MockDraftTest(unittest.TestCase):
             if snap["practice"]["my_turn"]:
                 assistant.practice_draft(
                     snap["recommendation"]["top"]["player"]["player_id"])
-        self.assertEqual(assistant.snapshot["draft"]["picks_made"], 180)
-        self.assertEqual(len(assistant.snapshot["roster_players"]), 15)
+        self.assertEqual(assistant.snapshot["draft"]["picks_made"],
+                         config.TEAMS * config.ROUNDS)
+        self.assertEqual(len(assistant.snapshot["roster_players"]),
+                         config.ROUNDS)
 
         stopped = assistant.stop_practice()
         self.assertTrue(stopped["ok"], stopped)

@@ -10,6 +10,8 @@ import random
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import config
+
 USER_ID = "100000000000000001"
 LEAGUE_ID = "900000000000000001"
 DRAFT_ID = "800000000000000001"
@@ -159,6 +161,11 @@ class FakeSleeper:
         self.mock_picks = []
         self.mock_status = "drafting"
         self.mock_draft_order = {USER_ID: 4}
+        # In-season state
+        self.week = 1
+        self.my_players = []
+        self.my_starters = []
+        self.weekly = {}          # player_id -> per-week stat line
 
         outer = self
 
@@ -199,7 +206,8 @@ class FakeSleeper:
     def draft_object(self):
         return {
             "draft_id": DRAFT_ID, "status": self.status, "type": "snake",
-            "settings": {"teams": 12, "rounds": 15, "reversal_round": 0},
+            "settings": {"teams": 12, "rounds": config.ROUNDS,
+                         "reversal_round": 0},
             "draft_order": self.draft_order or None,
             "slot_to_roster_id": {str(i): i for i in range(1, 13)},
             "league_id": LEAGUE_ID, "season": "2026",
@@ -209,7 +217,8 @@ class FakeSleeper:
         """A Sleeper mock draft: a real draft object with no league attached."""
         return {
             "draft_id": MOCK_DRAFT_ID, "status": self.mock_status, "type": "snake",
-            "settings": {"teams": 12, "rounds": 15, "reversal_round": 0},
+            "settings": {"teams": 12, "rounds": config.ROUNDS,
+                         "reversal_round": 0},
             "draft_order": self.mock_draft_order or None,
             "slot_to_roster_id": {}, "league_id": None, "season": "2026",
         }
@@ -231,9 +240,11 @@ class FakeSleeper:
                 return [{
                     "league_id": LEAGUE_ID, "name": "Fantasy NFL 2026",
                     "total_rosters": 12, "season": "2026",
-                    "settings": {"draft_rounds": 15},
-                    "roster_positions": ["QB", "RB", "RB", "WR", "WR", "TE",
-                                         "FLEX", "FLEX", "K", "DEF"] + ["BN"] * 5,
+                    "settings": {"draft_rounds": config.ROUNDS},
+                    "roster_positions": (["QB", "RB", "RB", "WR", "WR", "TE"]
+                                         + ["FLEX"] * config.FLEX_SLOTS
+                                         + ["K", "DEF"]
+                                         + ["BN"] * config.BENCH),
                     "scoring_settings": {"rec": 1.0, "pass_td": 4.0, "pass_int": -1.0,
                                          "fum_lost": -2.0, "rec_td": 6.0,
                                          "rush_td": 6.0, "pass_yd": 0.04,
@@ -246,6 +257,21 @@ class FakeSleeper:
                 for i in range(2, 13):
                     users.append({"user_id": "user%d" % i, "display_name": "Manager %d" % i})
                 return users
+            if path.startswith("/v1/projections/nfl/"):
+                # Weekly projections, in the shape the real endpoint returns.
+                return [{"player_id": pid, "stats": stats}
+                        for pid, stats in self.weekly.items()]
+            if path == "/v1/state/nfl":
+                return {"week": self.week, "season": "2026",
+                        "season_type": "regular"}
+            if path == "/v1/league/%s/rosters" % LEAGUE_ID:
+                out = [{"roster_id": 1, "owner_id": USER_ID,
+                        "players": list(self.my_players),
+                        "starters": list(self.my_starters)}]
+                for i in range(2, 13):
+                    out.append({"roster_id": i, "owner_id": "user%d" % i,
+                                "players": [], "starters": []})
+                return out
             if path == "/v1/user/%s/drafts/nfl/2026" % USER_ID:
                 # The league draft plus a standalone mock, exactly as Sleeper
                 # reports them: a mock carries no league_id.

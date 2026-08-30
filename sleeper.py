@@ -145,6 +145,67 @@ def get_draft(draft_id):
     return get_json("%s/draft/%s" % (API, draft_id))
 
 
+def get_state():
+    """Current NFL week and season, straight from Sleeper."""
+    return get_json("%s/state/%s" % (API, config.SPORT))
+
+
+def get_rosters(league_id):
+    """Every roster in the league, with owner_id and player_ids."""
+    return get_json("%s/league/%s/rosters" % (API, league_id))
+
+
+def get_matchups(league_id, week):
+    """Who plays whom this week, and each roster's starters."""
+    return get_json("%s/league/%s/matchups/%s" % (API, league_id, week))
+
+
+def get_transactions(league_id, week):
+    """Trades, waivers and free-agent moves for a week."""
+    return get_json("%s/league/%s/transactions/%s" % (API, league_id, week))
+
+
+def my_roster(rosters, user_id):
+    """Find my roster among the league's. Returns the roster dict or None."""
+    for roster in rosters or []:
+        if str(roster.get("owner_id")) == str(user_id):
+            return roster
+    return None
+
+
+# Weekly projections. Same uncertainty as the season-long endpoint, so probe
+# rather than assume - a start/sit call wants THIS week's number, not a
+# season total divided by seventeen.
+WEEKLY_PROJECTION_CANDIDATES = [
+    ("api.sleeper.com week",
+     "https://api.sleeper.com/projections/nfl/{season}/{week}"
+     "?season_type=regular&position[]=QB&position[]=RB&position[]=WR"
+     "&position[]=TE&position[]=K&position[]=DEF&order_by=ppr"),
+    ("api.sleeper.app week",
+     "https://api.sleeper.app/projections/nfl/{season}/{week}"
+     "?season_type=regular&position[]=QB&position[]=RB&position[]=WR"
+     "&position[]=TE&position[]=K&position[]=DEF&order_by=ppr"),
+    ("v1 week",
+     "https://api.sleeper.app/v1/projections/nfl/regular/{season}/{week}"),
+]
+
+
+def probe_weekly_projections(season, week, verbose=False):
+    """Try to get projections for one specific week. Returns (rows, report).
+
+    Fast-failing on purpose: this runs while someone is setting a lineup, so a
+    source that is not answering should cost seconds, not a minute. The first
+    candidate is built from API so it follows the configured base rather than
+    always reaching for a fixed host.
+    """
+    candidates = [("api base week",
+                   "%s/projections/%s/%s/%s" % (API, config.SPORT, season, week))]
+    candidates += [(label, template.format(season=season, week=week))
+                   for label, template in WEEKLY_PROJECTION_CANDIDATES]
+    return probe_projections(season, candidates=candidates, verbose=verbose,
+                             timeout=6, retries=1)
+
+
 def get_user_drafts(user_id, season=None):
     """Every draft this user is in, including mock drafts.
 
@@ -449,7 +510,8 @@ def _looks_useful(rows):
     return hits >= 25
 
 
-def probe_projections(season=None, candidates=None, verbose=True):
+def probe_projections(season=None, candidates=None, verbose=True,
+                      timeout=45, retries=2):
     """Try each candidate endpoint shape and return the first useful one.
 
     Returns (rows, report) where report lists every attempt and its outcome, so
@@ -461,7 +523,7 @@ def probe_projections(season=None, candidates=None, verbose=True):
     for label, template in candidates:
         url = template.format(season=season)
         try:
-            payload = get_json(url, timeout=45, retries=2)
+            payload = get_json(url, timeout=timeout, retries=retries)
         except SleeperError as exc:
             report.append({"label": label, "url": url, "ok": False, "detail": str(exc)})
             if verbose:
