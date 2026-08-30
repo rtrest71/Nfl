@@ -284,6 +284,7 @@
 <script>
 let STATE = null;
 let sortKey = "overall", sortDir = 1;
+let DOWN_SINCE = null;   // when the server stopped answering, for the banner
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g,
@@ -306,8 +307,20 @@ async function poll() {
     }
     if (data) { STATE = data; render(); }
     $("status").textContent = (data.league && data.league.status) || "-";
+    DOWN_SINCE = null;
   } catch (err) {
+    // The server stopped. Say so loudly and say exactly how to fix it - a
+    // blank page during a live draft is the worst possible failure.
+    if (!DOWN_SINCE) DOWN_SINCE = Date.now();
+    const secs = Math.round((Date.now() - DOWN_SINCE) / 1000);
     $("status").textContent = "server down";
+    $("alerts").innerHTML = `<div class="alert bad" style="font-size:16px">
+      THE APP STOPPED (${secs}s ago) — the terminal window was closed, or
+      Ctrl-C was pressed.<br>
+      <span style="font-weight:400">Restart it: open Terminal, then
+      <b>cd Nfl</b> and <b>./start.command</b>. This page reconnects by
+      itself. Nothing is lost — every pick is re-read from Sleeper.</span>
+      </div>`;
   }
 }
 

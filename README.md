@@ -26,9 +26,17 @@ matters.
 
 ## On draft day
 
-```bash
-python3 app.py
-```
+**Double-click `start.command` in Finder.** That is the draft-day way to launch
+it, rather than `python3 app.py`, because it:
+
+- **restarts the app automatically** if it ever stops, so a stray Ctrl-C or a
+  crash costs you three seconds instead of your pick;
+- **keeps the Mac awake**, so the machine cannot sleep between picks and drop
+  the live feed;
+- **finds a free port** if 8000 is already taken.
+
+From a terminal it is `./start.command`. To stop it for real, press Ctrl-C or
+close the window.
 
 Leave it running. It polls Sleeper every 3 seconds. When the draft starts,
 Sleeper randomises the order; the app detects your slot within seconds and
@@ -269,20 +277,30 @@ loudly on any difference. Live settings win — update `config.SCORING` to match
 and restart. If it warns about **superflex or two quarterbacks**, stop and fix
 it: the QB strategy assumes one QB and would be badly wrong.
 
-### The page is blank or shows "server down"
+### The page is blank, or Safari says "can't connect to the server"
 
-The server stopped. Restart it — no state is lost that matters, since picks are
-re-read from Sleeper on the first poll. Manual overrides are the exception and
-would need re-entering.
+The app is not running. Almost always this means the terminal window was
+closed, or Ctrl-C was pressed. **Nothing is lost** — every pick is re-read from
+Sleeper the moment it starts again. Only manual overrides would need
+re-entering.
+
+Double-click `start.command`, or:
 
 ```bash
-python3 app.py
+cd Nfl
+./start.command
 ```
+
+If you launched with `start.command` in the first place, it restarts itself
+within three seconds and you will rarely see this at all.
 
 ### Port 8000 is already in use
 
+Handled automatically — the app walks up to the next free port and prints which
+one it took. To force a specific one:
+
 ```bash
-python3 app.py --port 8080
+python3 app.py --port 9000
 ```
 
 ### Everything is broken and you are on the clock

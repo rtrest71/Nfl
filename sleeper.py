@@ -174,10 +174,11 @@ def verify_league_settings(league):
             "Team count is %s live but %s in config - VOR baselines are wrong "
             "until you fix config.TEAMS." % (total, config.TEAMS))
 
-    settings = league.get("settings") or {}
-    rounds = settings.get("draft_rounds")
-    if rounds and int(rounds) != config.ROUNDS:
-        warnings.append("Draft rounds live=%s config=%s." % (rounds, config.ROUNDS))
+    # Deliberately NOT checked here: league.settings.draft_rounds. Sleeper
+    # leaves that at a default (it read 3 on a 15-round league) and the draft
+    # object is what actually governs the draft, so comparing it produced a
+    # scary false alarm. The real round count is validated in
+    # Assistant.draft_shape() against the draft object itself.
 
     scoring = league.get("scoring_settings") or {}
     checks = [("rec", 1.0), ("pass_td", 4.0), ("pass_int", -1.0),
@@ -185,9 +186,12 @@ def verify_league_settings(league):
               ("pass_yd", 0.04), ("rush_yd", 0.1), ("rec_yd", 0.1)]
     for key, expected in checks:
         if key in scoring and abs(float(scoring[key]) - expected) > 1e-6:
+            # The app already scores off the live settings, so this is
+            # information rather than a problem. Say so, or it reads as an
+            # error and undermines trust in the warnings that do matter.
             warnings.append(
-                "SCORING MISMATCH: %s is %s live but %s in config.py. "
-                "Live value wins - update config.SCORING."
+                "Your league scores %s at %s, not the %s written in the build "
+                "spec. The app is using your league's value - no action needed."
                 % (key, scoring[key], expected))
 
     roster_positions = league.get("roster_positions") or []

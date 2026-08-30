@@ -785,21 +785,44 @@ def main():
     assistant.recompute()
 
     Handler.assistant = assistant
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+
+    # Never die because a port is busy - a leftover copy of this app, or
+    # anything else on 8000, must not stop you drafting. Walk up until one
+    # binds and tell the user which it took.
+    server = None
+    port = args.port
+    for candidate in range(args.port, args.port + 12):
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", candidate), Handler)
+            port = candidate
+            break
+        except OSError:
+            continue
+    if server is None:
+        print("\n  Could not open any port between %d and %d."
+              % (args.port, args.port + 11))
+        print("  Something else is using them. Try:  python3 app.py --port 9000")
+        return
+    if port != args.port:
+        print("\n  Port %d was busy - using %d instead." % (args.port, port))
 
     poller = threading.Thread(target=assistant.poll_loop, daemon=True)
     poller.start()
 
-    url = "http://localhost:%d" % args.port
-    print("\n  Sleeper Draft Assistant")
+    url = "http://localhost:%d" % port
+    print("\n" + "=" * 62)
+    print("  SLEEPER DRAFT ASSISTANT IS RUNNING")
     print("  %s" % url)
+    print("=" * 62)
     print("  players=%d projections=%d adp=%d"
           % (len(assistant.players), len(assistant.projections), len(assistant.adp)))
     if assistant.errors:
         print("\n  PROBLEMS:")
         for err in assistant.errors:
             print("   - %s" % err)
-    print("\n  Ctrl-C to stop.\n")
+    print("\n  >> KEEP THIS TERMINAL WINDOW OPEN FOR THE WHOLE DRAFT. <<")
+    print("     Closing it, or pressing Ctrl-C, stops the app and the page")
+    print("     goes blank. Nothing is lost - just start it again.\n")
 
     if not args.no_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
