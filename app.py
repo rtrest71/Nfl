@@ -871,7 +871,100 @@ class Assistant:
 
         with self.lock:
             self.season = season
+
+        # Also drop it on disk, so it is available without the browser.
+        try:
+            if season.get("status") == "ok":
+                path = os.path.join(config.CACHE_DIR, "weekly_brief.txt")
+                os.makedirs(config.CACHE_DIR, exist_ok=True)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(self.weekly_brief())
+        except OSError:
+            pass
         return season
+
+    def weekly_brief(self):
+        """A plain-text summary you can paste into any assistant.
+
+        Deliberately self-contained: it carries the league rules alongside the
+        lineup, because an assistant that does not know this is a one-flex,
+        4-point-passing-TD league will give you generic advice.
+        """
+        season = dict(self.season)
+        if season.get("status") != "ok":
+            return ("The assistant has no lineup yet%s."
+                    % (": " + season["error"] if season.get("error") else ""))
+
+        lines = []
+        lines.append("FANTASY WEEKLY BRIEF - %s" % (self.league or {}).get("name"))
+        lines.append("Week %s. Projections: %s."
+                     % (season.get("week"), season.get("source")))
+        lines.append("")
+        lines.append("LEAGUE RULES THAT CHANGE THE ADVICE:")
+        lines.append("  12 teams, full PPR (1 point per catch).")
+        lines.append("  Passing touchdowns are worth 4, NOT 6.")
+        lines.append("  Starters: 1 QB, 2 RB, 2 WR, 1 TE, %d FLEX, 1 K, 1 DEF."
+                     % config.FLEX_SLOTS)
+        lines.append("  %d bench spots and NO injured-reserve slot, so an "
+                     "injured player occupies a real roster spot." % config.BENCH)
+        lines.append("")
+        lines.append("MY STARTING LINEUP (projected %s total):"
+                     % season.get("total"))
+        for player in season.get("starters", []):
+            lines.append("  %-5s %-24s %-3s %-4s %6.1f%s"
+                         % (player.get("slot"), player.get("name"),
+                            player.get("position"), player.get("team") or "",
+                            player.get("points") or 0,
+                            "  [%s]" % player["injury_status"]
+                            if player.get("injury_status") else ""))
+
+        bench = season.get("bench") or []
+        if bench:
+            lines.append("")
+            lines.append("BENCH:")
+            for player in bench:
+                lines.append("  %-24s %-3s %-4s %6.1f%s"
+                             % (player.get("name"), player.get("position"),
+                                player.get("team") or "",
+                                player.get("points") or 0,
+                                "  [%s]" % player["injury_status"]
+                                if player.get("injury_status") else ""))
+
+        changes = season.get("changes") or []
+        if changes:
+            lines.append("")
+            lines.append("CHANGES THE APP RECOMMENDS (worth about %s points):"
+                         % season.get("gain"))
+            for change in changes:
+                lines.append("  %-5s %-24s %-3s %6.1f%s"
+                             % (change.get("action"), change.get("name"),
+                                change.get("position"), change.get("points") or 0,
+                                "  (%s)" % change["reason"]
+                                if change.get("reason") else ""))
+        else:
+            lines.append("")
+            lines.append("My Sleeper lineup already matches this.")
+
+        unavailable = season.get("unavailable") or []
+        if unavailable:
+            lines.append("")
+            lines.append("CANNOT PLAY:")
+            for player in unavailable:
+                lines.append("  %-24s %-3s  %s"
+                             % (player.get("name"), player.get("position"),
+                                player.get("reason")))
+
+        lines.append("")
+        lines.append("These projections are computed from raw projected stats "
+                     "using the exact scoring above, not a generic PPR column.")
+        if str(season.get("source", "")).startswith("season"):
+            lines.append("NOTE: season averages, not this week's matchup - "
+                         "weaker for a single week.")
+        lines.append("")
+        lines.append("What I want from you: anything the numbers above cannot "
+                     "see - matchups, weather, snap-count news, injury reports "
+                     "later than this - that would change a start/sit call.")
+        return "\n".join(lines)
 
     def evaluate_trade(self, give_names, get_names):
         """Score a trade offer by what it does to my starting lineup."""
@@ -1099,6 +1192,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(snapshot or {"ok": False, "error": "no data yet"})
             if path == "/api/health":
                 return self._json({"ok": True, "time": time.time()})
+            if path == "/api/brief":
+                return self._send(200, self.assistant.weekly_brief(),
+                                  "text/plain; charset=utf-8")
             if path == "/api/drafts":
                 return self._json(self.assistant.list_drafts())
             return self._json({"error": "not found"}, 404)

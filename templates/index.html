@@ -378,10 +378,20 @@ function render() {
   renderData(s);
 }
 
+let LINEUP_STAMP = null;
+
 function renderSeason(s) {
   const wrap = $("seasonWrap");
   if (!s.season_mode) { wrap.style.display = "none"; return; }
   wrap.style.display = "";
+
+  // Only redraw when the lineup actually changed. Rebuilding this every second
+  // snapped the Bench section shut the instant you opened it.
+  const sea0 = s.season || {};
+  const stamp = [sea0.status, sea0.checked_at, sea0.total,
+                 (sea0.changes || []).length].join("|");
+  if (stamp === LINEUP_STAMP) return;
+  LINEUP_STAMP = stamp;
 
   // The draft is over, so the draft-day furniture is just noise now.
   ["rec", "grid", "pool"].forEach(id => {
@@ -404,6 +414,9 @@ function renderSeason(s) {
       <div><span class="muted">week</span> <b>${sea.week}</b></div>
       <div><span class="muted">projected</span> <b>${num(sea.total, 1)}</b></div>
       <button onclick="refreshLineup()">Refresh</button>
+      <button onclick="copyBrief(this)"
+              style="background:#1c3a5e;border-color:var(--accent)">
+        Copy for my assistant</button>
       <span class="muted" style="font-size:11px">${esc(sea.source)}</span>
     </div>`;
 
@@ -459,7 +472,34 @@ function renderSeason(s) {
 
 async function refreshLineup() {
   await post("/api/lineup/refresh", {});
+  LINEUP_STAMP = null;          // force a redraw after a manual refresh
   poll();
+}
+
+async function copyBrief(btn) {
+  const was = btn.textContent;
+  btn.textContent = "copying…";
+  try {
+    const text = await (await fetch("/api/brief", {cache: "no-store"})).text();
+    let done = false;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try { await navigator.clipboard.writeText(text); done = true; } catch (e) {}
+    }
+    if (!done) {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); done = true; } catch (e) {}
+      document.body.removeChild(ta);
+    }
+    btn.textContent = done ? "Copied — paste it to your assistant" : "Copy failed";
+  } catch (e) {
+    btn.textContent = "Copy failed";
+  }
+  setTimeout(function () { btn.textContent = was; }, 2600);
 }
 
 async function checkTrade() {

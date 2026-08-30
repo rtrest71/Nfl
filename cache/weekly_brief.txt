@@ -1,0 +1,37 @@
+FANTASY WEEKLY BRIEF - Fantasy NFL 2026
+Week 5. Projections: week 5 projections.
+
+LEAGUE RULES THAT CHANGE THE ADVICE:
+  12 teams, full PPR (1 point per catch).
+  Passing touchdowns are worth 4, NOT 6.
+  Starters: 1 QB, 2 RB, 2 WR, 1 TE, 1 FLEX, 1 K, 1 DEF.
+  5 bench spots and NO injured-reserve slot, so an injured player occupies a real roster spot.
+
+MY STARTING LINEUP (projected 185.7 total):
+  QB    Zay Mitchell Jr.         QB  ARI    24.4
+  RB    Trevor Hyatt Jr.         RB  ARI    24.1
+  RB    Blake Achane             RB  ATL    23.6
+  WR    Drake McConkey Jr.       WR  ARI    20.7
+  WR    Jaxon Polk               WR  ATL    20.3
+  TE    Bryce Nix Jr.            TE  ARI    14.9
+  FLEX  Malik Maye               RB  BAL    22.9
+  K     Zay Mitchell Jr.         K   ARI     9.3
+  DEF   ARI Defense              DEF ARI    25.4
+
+BENCH:
+  Xavier Bowers            RB  BUF    22.6
+  Isaiah Burton            WR  BAL    20.1
+  Deion Hyatt              WR  BUF    19.4
+  Bijan Nabers             TE  ATL    14.4
+
+CHANGES THE APP RECOMMENDS (worth about 49.6 points):
+  START Bryce Nix Jr.            TE    14.9
+  START ARI Defense              DEF   25.4
+  START Zay Mitchell Jr.         K      9.3
+  BENCH Deion Hyatt              WR    19.4
+  BENCH Isaiah Burton            WR    20.1
+  BENCH Xavier Bowers            RB    22.6
+
+These projections are computed from raw projected stats using the exact scoring above, not a generic PPR column.
+
+What I want from you: anything the numbers above cannot see - matchups, weather, snap-count news, injury reports later than this - that would change a start/sit call.
