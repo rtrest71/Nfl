@@ -139,6 +139,37 @@
 
   <div id="alerts"></div>
 
+  <!-- In-season: shown only once the draft is complete -->
+  <div id="seasonWrap" style="display:none">
+    <div class="row">
+      <div class="col" style="flex:1.4">
+        <div class="panel">
+          <h2>This week's lineup</h2>
+          <div id="lineupBox"></div>
+        </div>
+      </div>
+      <div class="col" style="flex:1;min-width:340px">
+        <div class="panel">
+          <h2>Trade check</h2>
+          <p class="muted" style="margin:0 0 9px;font-size:12px">
+            Judged on what it does to your <b>starting lineup</b>. A trade that
+            improves your bench is worth nothing.</p>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <input id="tradeGive" placeholder="you send (comma separated)">
+            <input id="tradeGet" placeholder="you get (comma separated)">
+            <div class="flex">
+              <button onclick="checkTrade()"
+                      style="background:#1c3a5e;border-color:var(--accent)">
+                Check this trade</button>
+              <span class="muted" id="tradeMsg"></span>
+            </div>
+          </div>
+          <div id="tradeOut" style="margin-top:12px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="row">
     <div class="col" style="flex:2.1">
       <div class="panel">
@@ -333,6 +364,7 @@ async function poll() {
 
 function render() {
   const s = STATE;
+  renderSeason(s);
   renderHeader(s);
   renderAlerts(s);
   renderRec(s);
@@ -344,6 +376,129 @@ function render() {
   renderSim(s);
   renderPractice(s);
   renderData(s);
+}
+
+function renderSeason(s) {
+  const wrap = $("seasonWrap");
+  if (!s.season_mode) { wrap.style.display = "none"; return; }
+  wrap.style.display = "";
+
+  // The draft is over, so the draft-day furniture is just noise now.
+  ["rec", "grid", "pool"].forEach(id => {
+    const panel = $(id) && $(id).closest(".panel");
+    if (panel) panel.style.display = "none";
+  });
+
+  const sea = s.season || {};
+  const box = $("lineupBox");
+  if (sea.status === "error") {
+    box.innerHTML = `<div class="alert bad">${esc(sea.error)}</div>`;
+    return;
+  }
+  if (sea.status !== "ok") {
+    box.innerHTML = `<div class="muted">Loading your roster…</div>`;
+    return;
+  }
+
+  let html = `<div class="flex" style="margin-bottom:10px">
+      <div><span class="muted">week</span> <b>${sea.week}</b></div>
+      <div><span class="muted">projected</span> <b>${num(sea.total, 1)}</b></div>
+      <button onclick="refreshLineup()">Refresh</button>
+      <span class="muted" style="font-size:11px">${esc(sea.source)}</span>
+    </div>`;
+
+  if (sea.changes && sea.changes.length) {
+    html += `<div class="alert warn"><b>Change your Sleeper lineup</b>` +
+      (sea.gain > 0.05 ? ` — worth about ${num(sea.gain, 1)} points this week` : "") +
+      `</div>`;
+    html += `<table style="margin-bottom:12px"><tbody>`;
+    sea.changes.forEach(c => {
+      const good = c.action === "START";
+      html += `<tr>
+        <td style="width:64px;color:${good ? "var(--good)" : "var(--bad)"};
+                   font-weight:700">${c.action}</td>
+        <td><b>${esc(c.name)}</b></td>
+        <td>${posTag(c.position)}</td>
+        <td class="muted">${esc(c.team || "")}</td>
+        <td>${num(c.points, 1)}</td>
+        <td class="muted">${c.reason ? esc(c.reason) : ""}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+  } else {
+    html += `<div class="alert info">Your Sleeper lineup already matches this.
+      Nothing to change.</div>`;
+  }
+
+  html += `<table><thead><tr><th>slot</th><th>player</th><th>pos</th>
+      <th>team</th><th>proj</th></tr></thead><tbody>`;
+  (sea.starters || []).forEach(p => {
+    html += `<tr><td class="muted">${esc(p.slot)}</td>
+      <td><b>${esc(p.name)}</b>${p.injury_status
+        ? ' <span class="tag">' + esc(p.injury_status) + "</span>" : ""}</td>
+      <td>${posTag(p.position)}</td><td class="muted">${esc(p.team || "")}</td>
+      <td>${num(p.points, 1)}</td></tr>`;
+  });
+  html += `</tbody></table>`;
+
+  if (sea.unavailable && sea.unavailable.length) {
+    html += `<div class="alert bad" style="margin-top:11px"><b>Cannot play</b> —
+      do not start these whatever the projection:<br>` +
+      sea.unavailable.map(p => `${esc(p.name)} (${esc(p.reason)})`).join(" · ") +
+      `</div>`;
+  }
+  if (sea.bench && sea.bench.length) {
+    html += `<details style="margin-top:11px"><summary>Bench</summary>
+      <table style="margin-top:8px"><tbody>` +
+      sea.bench.map(p => `<tr><td>${posTag(p.position)}</td>
+        <td>${esc(p.name)}</td><td class="muted">${esc(p.team || "")}</td>
+        <td>${num(p.points, 1)}</td></tr>`).join("") +
+      `</tbody></table></details>`;
+  }
+  box.innerHTML = html;
+}
+
+async function refreshLineup() {
+  await post("/api/lineup/refresh", {});
+  poll();
+}
+
+async function checkTrade() {
+  const msg = $("tradeMsg"), out = $("tradeOut");
+  msg.textContent = "checking…";
+  const res = await post("/api/trade", {
+    give: $("tradeGive").value, get: $("tradeGet").value});
+  msg.textContent = "";
+  if (!res.ok) {
+    out.innerHTML = `<div class="alert warn">${esc(res.error)}</div>` +
+      (res.notes || []).map(n => `<div class="muted">${esc(n)}</div>`).join("");
+    return;
+  }
+  const colour = res.tone === "good" ? "var(--good)"
+               : res.tone === "bad" ? "var(--bad)" : "var(--warn)";
+  let html = `<div style="font-size:22px;font-weight:800;color:${colour}">
+      ${esc(res.verdict)}</div>
+    <div style="margin:6px 0 12px">
+      Your starting lineup: <b>${num(res.before, 1)}</b> →
+      <b>${num(res.after, 1)}</b>
+      <span style="color:${colour};font-weight:700">
+        (${res.delta >= 0 ? "+" : ""}${num(res.delta, 1)} per week)</span>
+    </div>`;
+  html += `<table><tbody>`;
+  (res.giving || []).forEach(p => {
+    html += `<tr><td style="color:var(--bad);width:52px">OUT</td>
+      <td>${esc(p.name)}</td><td>${posTag(p.position)}</td>
+      <td>${num(p.points, 1)}</td></tr>`;
+  });
+  (res.getting || []).forEach(p => {
+    html += `<tr><td style="color:var(--good);width:52px">IN</td>
+      <td>${esc(p.name)}</td><td>${posTag(p.position)}</td>
+      <td>${num(p.points, 1)}</td></tr>`;
+  });
+  html += `</tbody></table>`;
+  (res.notes || []).forEach(n => {
+    html += `<div class="alert warn" style="margin-top:9px">${esc(n)}</div>`;
+  });
+  out.innerHTML = html;
 }
 
 function renderPractice(s) {

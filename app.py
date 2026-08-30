@@ -62,6 +62,8 @@ class Assistant:
 
         self.manual_taken = []      # undo stack of manually marked players
         self.sim = {"status": "idle"}
+        self.season = {"status": "idle"}   # in-season lineup, refreshed in the
+        self.season_checked = 0            # background once the draft is over
         self.warnings = []
         if practice:
             # Belongs here rather than in main(): however this app is started,
@@ -262,6 +264,8 @@ class Assistant:
             try:
                 self.poll_once()
                 self.recompute()
+                if self.season_mode():
+                    self.refresh_season()
             except Exception:  # noqa: BLE001 - the loop must never die
                 traceback.print_exc()
             time.sleep(self._poll_interval())
@@ -490,6 +494,8 @@ class Assistant:
                 "practice": (self.practice.status() if self.practice
                              else {"active": False}),
                 "simulation": dict(self.sim),
+                "season_mode": self.season_mode(),
+                "season": dict(self.season),
                 "errors": self.errors,
                 "notes": self.notes[-12:],
                 "data": {
@@ -804,6 +810,137 @@ class Assistant:
         except sleeper.SleeperError as exc:
             return {"ok": False, "error": str(exc)}
 
+    # -- in season ---------------------------------------------------------
+
+    def season_mode(self):
+        """True once the draft is finished and the season is what matters."""
+        return (self.draft or {}).get("status") == "complete"
+
+    def refresh_season(self, force=False):
+        """Recompute this week's best lineup. Safe to call often.
+
+        Held to one refresh every ten minutes unless forced: it makes several
+        network calls and nothing about a lineup changes second to second.
+        """
+        if self.practice or self.offline:
+            return self.season
+        now = time.time()
+        if not force and now - self.season_checked < 600:
+            return self.season
+        self.season_checked = now
+
+        try:
+            import team
+            ctx = team.load_context(quiet=True)
+            best = team.best_lineup(ctx["owned"])
+            current = set(ctx["starters_ids"])
+            recommended = {p["player_id"] for p in best["starters"]}
+            by_id = {p["player_id"]: p for p in ctx["owned"]}
+
+            changes = []
+            for pid in recommended - current:
+                player = by_id.get(pid)
+                if player:
+                    changes.append({"action": "START", **player})
+            for pid in current - recommended:
+                player = by_id.get(pid)
+                if player:
+                    ok, reason = team.playable(player)
+                    changes.append({"action": "BENCH", "reason": reason, **player})
+
+            gain = 0.0
+            if current:
+                held = [by_id[p] for p in current if p in by_id]
+                gain = round(best["total"] - simulation.optimal_lineup(held)[0], 1)
+
+            season = {
+                "status": "ok",
+                "week": ctx["week"],
+                "source": ctx["projection_source"],
+                "total": best["total"],
+                "starters": best["starters"],
+                "bench": best["bench"],
+                "unfilled": best["unfilled"],
+                "unavailable": [{"reason": r, **p} for p, r in best["unavailable"]],
+                "changes": changes,
+                "gain": gain,
+                "checked_at": now,
+            }
+        except Exception as exc:  # noqa: BLE001 - never break the page
+            season = {"status": "error", "error": str(exc), "checked_at": now}
+
+        with self.lock:
+            self.season = season
+        return season
+
+    def evaluate_trade(self, give_names, get_names):
+        """Score a trade offer by what it does to my starting lineup."""
+        try:
+            import team
+            ctx = team.load_context(quiet=True)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
+        giving, missing_give = team.resolve_names(give_names, ctx)
+        getting, missing_get = team.resolve_names(get_names, ctx)
+        owned = {p["player_id"] for p in ctx["owned"]}
+
+        notes = ["Could not find '%s'" % n for n in missing_give + missing_get]
+        already = [p["name"] for p in getting if p["player_id"] in owned]
+        for name in already:
+            notes.append("You already own %s - ignored on the incoming side."
+                         % name)
+        getting = [p for p in getting if p["player_id"] not in owned]
+        giving = [p for p in giving if p["player_id"] in owned]
+
+        seen, deduped = set(), []
+        for player in getting:
+            if player["player_id"] not in seen:
+                seen.add(player["player_id"])
+                deduped.append(player)
+        getting = deduped
+
+        if not giving or not getting:
+            return {"ok": False,
+                    "error": "Name at least one player on each side that is "
+                             "actually tradeable.", "notes": notes}
+
+        before = team.best_lineup(ctx["owned"])
+        give_ids = {p["player_id"] for p in giving}
+        after_roster = [p for p in ctx["owned"]
+                        if p["player_id"] not in give_ids] + getting
+        after = team.best_lineup(after_roster)
+        delta = round(after["total"] - before["total"], 1)
+
+        if delta >= 8:
+            verdict, tone = "ACCEPT", "good"
+        elif delta >= 3:
+            verdict, tone = "LEAN ACCEPT", "good"
+        elif delta > -3:
+            verdict, tone = "TOO CLOSE TO CALL", "even"
+        elif delta > -8:
+            verdict, tone = "LEAN REJECT", "bad"
+        else:
+            verdict, tone = "REJECT", "bad"
+
+        if len(after_roster) > config.ROSTER_SIZE:
+            notes.append("You would hold %d players for %d spots - you must "
+                         "drop %d." % (len(after_roster), config.ROSTER_SIZE,
+                                       len(after_roster) - config.ROSTER_SIZE))
+        if after["unfilled"] > before["unfilled"]:
+            notes.append("This leaves %d starting slot(s) you cannot fill."
+                         % after["unfilled"])
+
+        return {
+            "ok": True, "verdict": verdict, "tone": tone, "delta": delta,
+            "before": before["total"], "after": after["total"],
+            "week": ctx["week"], "source": ctx["projection_source"],
+            "giving": giving, "getting": getting,
+            "starters_after": after["starters"],
+            "new_ids": [p["player_id"] for p in getting],
+            "notes": notes,
+        }
+
     def follow_draft(self, draft_id):
         """Watch any Sleeper draft by id - a mock, or the real one.
 
@@ -987,6 +1124,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/undo":
                 ok, detail = self.assistant.undo_manual()
                 return self._json({"ok": ok, "detail": detail})
+            if path == "/api/lineup/refresh":
+                return self._json(self.assistant.refresh_season(force=True))
+            if path == "/api/trade":
+                return self._json(self.assistant.evaluate_trade(
+                    [n.strip() for n in (body.get("give") or "").split(",") if n.strip()],
+                    [n.strip() for n in (body.get("get") or "").split(",") if n.strip()]))
             if path == "/api/follow":
                 return self._json(
                     self.assistant.follow_draft(body.get("draft_id")))

@@ -216,6 +216,81 @@ class InSeasonTest(unittest.TestCase):
         _, missing = team.resolve_names(["Zzzz Notaplayer"], ctx)
         self.assertEqual(missing, ["Zzzz Notaplayer"])
 
+    # -- the app in season --------------------------------------------------
+
+    def _assistant(self, draft_status="complete"):
+        import app
+        self.server.status = draft_status
+        assistant = app.Assistant()
+        assistant.load_cached_data()
+        assistant.resolve_league()
+        assistant.poll_once()
+        assistant.recompute()
+        return assistant
+
+    def test_season_mode_switches_on_only_when_the_draft_is_done(self):
+        try:
+            self.assertFalse(self._assistant("drafting").season_mode())
+            self.assertTrue(self._assistant("complete").season_mode())
+        finally:
+            self.server.status = "complete"
+
+    def test_the_app_surfaces_the_weekly_lineup(self):
+        assistant = self._assistant()
+        season = assistant.refresh_season(force=True)
+        self.assertEqual(season["status"], "ok", season)
+        self.assertEqual(season["week"], 5)
+        self.assertGreater(season["total"], 0)
+        self.assertEqual(
+            len(season["starters"]),
+            sum(config.STARTERS.values()) + config.FLEX_SLOTS)
+
+        assistant.recompute()
+        snap = assistant.snapshot
+        self.assertTrue(snap["season_mode"])
+        self.assertEqual(snap["season"]["status"], "ok")
+
+    def test_it_names_the_swaps_when_the_sleeper_lineup_is_wrong(self):
+        assistant = self._assistant()
+        season = assistant.refresh_season(force=True)
+        # The fixture deliberately starts the first nine by ADP, which is not
+        # the best legal lineup, so there must be something to change.
+        self.assertTrue(season["changes"])
+        actions = {c["action"] for c in season["changes"]}
+        self.assertTrue(actions <= {"START", "BENCH"})
+        self.assertGreater(season["gain"], 0)
+
+    def test_trade_endpoint_scores_by_lineup_not_by_names(self):
+        assistant = self._assistant()
+        ctx = self.context()
+        owned_ids = {p["player_id"] for p in ctx["owned"]}
+        mine = ctx["owned"][0]["name"]
+        theirs = next(p for p in self.by_adp
+                      if p["player_id"] not in owned_ids)["name"]
+
+        result = assistant.evaluate_trade([mine], [theirs])
+        self.assertTrue(result["ok"], result)
+        self.assertIn(result["verdict"],
+                      ["ACCEPT", "LEAN ACCEPT", "TOO CLOSE TO CALL",
+                       "LEAN REJECT", "REJECT"])
+        self.assertAlmostEqual(result["after"] - result["before"],
+                               result["delta"], places=1)
+
+    def test_trade_endpoint_refuses_a_one_sided_request(self):
+        assistant = self._assistant()
+        result = assistant.evaluate_trade(["Zzzz Nobody"], ["Zzzz Nobody Two"])
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["notes"])
+
+    def test_trade_endpoint_ignores_a_player_i_already_own(self):
+        assistant = self._assistant()
+        ctx = self.context()
+        mine = ctx["owned"][0]["name"]
+        other_mine = ctx["owned"][1]["name"]
+        result = assistant.evaluate_trade([mine], [other_mine])
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("already own" in n for n in result["notes"]))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
