@@ -406,10 +406,13 @@ def eligible(player, state):
             return False, "you already have a defense"
 
     # No IR and 5 bench spots: no room for handcuff backups until the very end.
+    # The one exception is the backup to a back you already own - that is not a
+    # handcuff, it is insurance on your most valuable asset.
     order = player.get("depth_chart_order")
     if (isinstance(order, (int, float)) and order and order >= 2 and pos in ("RB", "WR")
             and rnd < config.HANDCUFF_BLOCK_ROUND):
-        return False, "backup on his own team - no bench room for handcuffs here"
+        if not (rnd >= config.OWN_HANDCUFF_UNLOCK_ROUND and is_own_handcuff(player, state)):
+            return False, "backup on his own team - no bench room for handcuffs here"
 
     # Roster completion: if I have exactly as many picks left as empty starting
     # slots, every remaining pick must fill one.
@@ -428,6 +431,26 @@ def eligible(player, state):
         return False, "you have enough at %s" % pos
 
     return True, ""
+
+
+def is_own_handcuff(player, state):
+    """True when this player backs up a running back already on my roster.
+
+    With no IR slots, an injury to your lead back and no replacement ends your
+    season. Backing up your OWN starter is the highest-leverage bench pick
+    available; backing up someone else's is a wasted roster spot.
+    """
+    if (player.get("position") or "").upper() != "RB":
+        return False
+    team = player.get("team")
+    if not team or team == "FA":
+        return False
+    for owned in state.get("my_players") or []:
+        if (owned.get("position") == "RB"
+                and owned.get("team") == team
+                and owned.get("player_id") != player.get("player_id")):
+            return True
+    return False
 
 
 def lineup_multiplier(position, roster_positions):
@@ -498,6 +521,11 @@ def plain_reason(player, state, p_survive, edge, tier_break):
         else:
             bits.append("Roughly a coin flip whether he lasts to your next turn.")
 
+    if player.get("own_handcuff"):
+        bits.append("He is the backup to a running back you already own. If yours "
+                    "gets hurt, this is the man who takes over - and this league "
+                    "has no injured-reserve spot to absorb that.")
+
     needs = state.get("needs") or {}
     if needs.get(player["position"], 0) > 0:
         bits.append("He fills an empty starting slot on your team.")
@@ -562,7 +590,14 @@ def recommend(board, state, limit=5):
         player["opponent_shift"] = shift
         multiplier = lineup_multiplier(player["position"], state["my_roster"])
         player["lineup_multiplier"] = multiplier
-        player["lineup_vor"] = round(player["adj_vor"] * multiplier, 2)
+        value = player["adj_vor"] * multiplier
+        # Insurance on a back you already own is worth more than his raw value
+        # suggests, because what it protects against is losing your season.
+        player["own_handcuff"] = (state["round"] >= config.OWN_HANDCUFF_UNLOCK_ROUND
+                                  and is_own_handcuff(player, state))
+        if player["own_handcuff"]:
+            value += config.OWN_HANDCUFF_BONUS
+        player["lineup_vor"] = round(value, 2)
         player["would_start"] = multiplier >= 1.0
 
     def survives(player):

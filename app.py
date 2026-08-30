@@ -393,6 +393,10 @@ class Assistant:
                 "picks_until_next": ((my_next_pick - current_pick)
                                      if my_next_pick else None),
                 "my_roster": my_positions,
+                # Full records, so the engine can tell whose backup a player is.
+                "my_players": [{"player_id": p.get("player_id"),
+                                "position": p.get("position"),
+                                "team": p.get("team")} for p in my_roster_players],
                 "my_remaining_picks": remaining,
                 "needs": needs,
                 "picks_left": max(picks_left, 1),

@@ -149,6 +149,14 @@ BACKUP_RB_PENALTY = 18.0
 BACKUP_WR_PENALTY = 10.0
 HANDCUFF_BLOCK_ROUND = 12    # never recommend a pure backup before this round
 
+# One exception to the handcuff block, and only one: the backup to a running
+# back YOU ALREADY OWN. Someone else's backup is a wasted roster spot. Your own
+# RB1's backup is insurance - with no IR slots and five bench spots, losing your
+# lead back with no replacement is the single worst thing that can happen to
+# this roster.
+OWN_HANDCUFF_UNLOCK_ROUND = 10
+OWN_HANDCUFF_BONUS = 15.0
+
 # VOR measures a player's value ASSUMING HE STARTS. A player who would sit on
 # your bench every week does not deliver that value, so his score is discounted
 # to this fraction. This is what stops the engine drafting a sixth running back

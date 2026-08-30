@@ -540,6 +540,72 @@ class TestValueGapScoping(unittest.TestCase):
             self.assertGreater(player["vor"], 0)
 
 
+class TestOwnHandcuff(unittest.TestCase):
+    """Someone else's backup is a wasted spot. Your own RB1's backup is
+    insurance against the worst thing that can happen in a no-IR league."""
+
+    def _player(self, pid, position, team, vor, depth=1):
+        return {"player_id": pid, "name": pid, "position": position, "team": team,
+                "vor": vor, "adj_vor": vor, "adp": 120.0, "adp_stdev": 25.0,
+                "depth_chart_order": depth, "points": 150.0, "risk_reasons": [],
+                "value_gap": 0, "tier": 1, "tier_last": False, "next_tier_size": 0}
+
+    def _state(self, round_no=11):
+        roster = ["RB", "RB", "WR", "WR", "TE", "RB", "WR", "QB", "WR", "RB"]
+        return {
+            "taken": set(), "round": round_no, "current_pick": 125,
+            "my_next_pick": 140, "picks_until_next": 15, "my_roster": roster,
+            "my_players": [{"player_id": "bijan", "position": "RB", "team": "ATL"}],
+            "my_remaining_picks": [125, 140, 155, 170],
+            "needs": valuation.roster_needs(roster), "picks_left": 4,
+            "opponent_needs": {},
+        }
+
+    def test_identifies_a_backup_to_a_back_i_own(self):
+        state = self._state()
+        mine = self._player("mine", "RB", "ATL", 20.0, depth=2)
+        other = self._player("other", "RB", "KC", 26.0, depth=2)
+        self.assertTrue(valuation.is_own_handcuff(mine, state))
+        self.assertFalse(valuation.is_own_handcuff(other, state))
+
+    def test_a_receiver_is_never_an_rb_handcuff(self):
+        state = self._state()
+        wr = self._player("wr", "WR", "ATL", 20.0, depth=2)
+        self.assertFalse(valuation.is_own_handcuff(wr, state))
+
+    def test_my_own_handcuff_is_allowed_late_but_not_early(self):
+        mine = self._player("mine", "RB", "ATL", 20.0, depth=2)
+        late, _ = valuation.eligible(mine, self._state(round_no=11))
+        early, _ = valuation.eligible(mine, self._state(round_no=6))
+        self.assertTrue(late)
+        self.assertFalse(early, "insurance should not come before your starters")
+
+    def test_someone_elses_backup_stays_blocked(self):
+        other = self._player("other", "RB", "KC", 26.0, depth=2)
+        ok, reason = valuation.eligible(other, self._state(round_no=11))
+        self.assertFalse(ok)
+        self.assertIn("bench room", reason)
+
+    def test_insurance_beats_a_better_backup_on_another_team(self):
+        state = self._state()
+        board = [self._player("mine", "RB", "ATL", 20.0, depth=2),
+                 self._player("other", "RB", "KC", 26.0, depth=2),
+                 self._player("wr", "WR", "BUF", 22.0)]
+        result = valuation.recommend(board, state)
+        self.assertEqual(result["top"]["player"]["player_id"], "mine")
+        self.assertTrue(result["top"]["player"]["own_handcuff"])
+        self.assertIn("backup to a running back you already own",
+                      result["top"]["reason"])
+
+    def test_no_handcuff_bonus_without_the_starter(self):
+        state = self._state()
+        state["my_players"] = [{"player_id": "x", "position": "RB", "team": "SF"}]
+        board = [self._player("mine", "RB", "ATL", 20.0, depth=2),
+                 self._player("wr", "WR", "BUF", 22.0)]
+        result = valuation.recommend(board, state)
+        self.assertEqual(result["top"]["player"]["player_id"], "wr")
+
+
 class TestQueueExport(unittest.TestCase):
     """Regression: before the draft starts the slot is unknown, so we own no
     pick numbers - and the queue was built from that, yielding three players
