@@ -540,6 +540,72 @@ class TestValueGapScoping(unittest.TestCase):
             self.assertGreater(player["vor"], 0)
 
 
+class TestQueueExport(unittest.TestCase):
+    """Regression: before the draft starts the slot is unknown, so we own no
+    pick numbers - and the queue was built from that, yielding three players
+    instead of forty. That is exactly when the queue has to be loaded."""
+
+    def _board(self):
+        players, projections, adp = {}, {}, {}
+        shape = {"QB": 24, "RB": 60, "WR": 70, "TE": 24, "K": 16, "DEF": 16}
+        pid = 0
+        for position, count in shape.items():
+            for i in range(count):
+                pid += 1
+                key = str(pid)
+                players[key] = {"player_id": key, "name": "%s %d" % (position, i),
+                                "position": position, "team": "XXX", "age": 25,
+                                "depth_chart_order": 1, "search_rank": pid}
+                projections[key] = {"stats": {"rec": max(0, 90 - i),
+                                              "rec_yd": max(0, 1300 - i * 15),
+                                              "rec_td": max(0, 10 - i // 6)}}
+                base = i * 2.0 + {"K": 170, "DEF": 165, "QB": 40, "TE": 30}.get(
+                    position, 0)
+                adp[key] = {"adp": max(1.0, base)}
+        return valuation.build_board(players, projections, adp, current_round=1)
+
+    def _state(self, **kwargs):
+        state = {"taken": set(), "round": 1, "current_pick": 1,
+                 "my_roster": [], "my_remaining_picks": [],
+                 "needs": valuation.roster_needs([]), "picks_left": 15,
+                 "opponent_needs": {}, "my_next_pick": None}
+        state.update(kwargs)
+        return state
+
+    def test_full_queue_before_the_slot_is_known(self):
+        queue = valuation.build_queue(self._board(), self._state())
+        self.assertEqual(len(queue), config.QUEUE_LENGTH,
+                         "queue was %d players before the draft started"
+                         % len(queue))
+
+    def test_queue_has_no_repeats(self):
+        queue = valuation.build_queue(self._board(), self._state())
+        ids = [p["player_id"] for p in queue]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_queue_does_not_front_load_kickers_or_defenses(self):
+        queue = valuation.build_queue(self._board(), self._state())
+        early = [p["position"] for p in queue[:20]]
+        self.assertNotIn("K", early)
+        self.assertNotIn("DEF", early)
+
+    def test_queue_is_mostly_pass_catchers_and_backs(self):
+        queue = valuation.build_queue(self._board(), self._state())
+        skill = sum(1 for p in queue if p["position"] in ("RB", "WR", "TE"))
+        self.assertGreaterEqual(skill, 30,
+                                "a full-PPR queue should be dominated by "
+                                "RB/WR/TE, got %d of %d" % (skill, len(queue)))
+
+    def test_queue_still_works_mid_draft(self):
+        board = self._board()
+        state = self._state(round=9, current_pick=100,
+                            my_roster=["RB", "RB", "WR", "WR", "TE", "RB", "WR", "QB"],
+                            my_remaining_picks=[100, 117, 124, 141, 148, 165, 172])
+        state["needs"] = valuation.roster_needs(state["my_roster"])
+        queue = valuation.build_queue(board, state)
+        self.assertGreaterEqual(len(queue), 15)
+
+
 class TestRunsAndWarnings(unittest.TestCase):
     def test_run_detection(self):
         history = [{"position": p} for p in

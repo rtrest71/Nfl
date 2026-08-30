@@ -668,15 +668,23 @@ def build_queue(board, state, length=None):
     # positional blocks rather than front-loading kickers.
     simulated_roster = list(state["my_roster"])
     simulated_taken = set(state["taken"])
-    my_remaining = state.get("my_remaining_picks") or [state.get("current_pick") or 1]
+    my_remaining = state.get("my_remaining_picks") or []
 
-    for offset, pick_no in enumerate(my_remaining):
+    # Plan every remaining ROUND, not just the pick numbers we happen to know.
+    # Before the draft starts the slot is unknown, so we own no pick numbers
+    # yet - and a queue built from that produced three players instead of
+    # forty, which is precisely when the queue matters most.
+    planned_rounds = max(1, config.ROUNDS - state["round"] + 1)
+
+    for offset in range(planned_rounds):
+        pick_no = (my_remaining[offset] if offset < len(my_remaining)
+                   else (state.get("current_pick") or 1))
         sim_state = dict(state)
         sim_state["round"] = state["round"] + offset
         sim_state["taken"] = simulated_taken
         sim_state["my_roster"] = simulated_roster
         sim_state["needs"] = roster_needs(simulated_roster)
-        sim_state["picks_left"] = max(1, len(my_remaining) - offset)
+        sim_state["picks_left"] = planned_rounds - offset
         sim_state["current_pick"] = pick_no
 
         # Re-rank for the roster as it will look at that pick, so the queue
