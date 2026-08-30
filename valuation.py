@@ -475,12 +475,12 @@ def plain_reason(player, state, p_survive, edge, tier_break):
 
     if p_survive is not None and gap_to_next:
         pct = int(round(p_survive * 100))
+        gap_phrase = ("the one pick until your next turn" if gap_to_next == 1
+                      else "the %d picks until your next turn" % gap_to_next)
         if pct <= 15:
-            bits.append("He almost certainly will not last the %d picks until your "
-                        "next turn." % gap_to_next)
+            bits.append("He almost certainly will not last %s." % gap_phrase)
         elif pct <= 45:
-            bits.append("Only about a %d%% chance he lasts the %d picks until your "
-                        "next turn." % (pct, gap_to_next))
+            bits.append("Only about a %d%% chance he lasts %s." % (pct, gap_phrase))
         elif pct >= 80:
             bits.append("He will probably still be here at your next pick, but "
                         "nobody better is likely to be.")
