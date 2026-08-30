@@ -226,6 +226,11 @@
         </div>
       </div>
 
+      <div class="panel" id="practicePanel">
+        <h2>Practice draft</h2>
+        <div id="practiceBox"></div>
+      </div>
+
       <div class="panel">
         <h2>Data &amp; manual controls</h2>
         <div id="dataStatus" class="muted" style="font-size:12px;margin-bottom:10px"></div>
@@ -335,7 +340,68 @@ function render() {
   renderGrid(s);
   renderPool(s);
   renderSim(s);
+  renderPractice(s);
   renderData(s);
+}
+
+function renderPractice(s) {
+  const p = s.practice || {};
+  const box = $("practiceBox");
+
+  if (!p.active) {
+    box.innerHTML = `
+      <p class="muted" style="margin:0 0 10px;font-size:12px">
+        Rehearse against 11 simulated managers. Nothing touches your real
+        league — it is purely to get used to the screen before 6pm.</p>
+      <div class="flex">
+        <button onclick="startPractice()"
+                style="background:#1c3a5e;border-color:var(--accent)">
+          Start a practice draft</button>
+        <select id="pracSlot">
+          <option value="">random slot</option>
+          ${Array.from({length: 12}, (_, i) =>
+            `<option value="${i + 1}">slot ${i + 1}</option>`).join("")}
+        </select>
+        <select id="pracSpeed">
+          <option value="3">normal</option>
+          <option value="1">fast</option>
+          <option value="0.3">very fast</option>
+        </select>
+      </div>`;
+    return;
+  }
+
+  const done = p.current_pick - 1;
+  box.innerHTML = `
+    <div class="alert warn" style="margin-bottom:10px">
+      PRACTICE DRAFT IN PROGRESS — slot ${p.my_slot}. None of this is real.</div>
+    <div class="flex" style="margin-bottom:9px">
+      <div><span class="muted">pick</span>
+        <b>${p.current_pick} / ${p.total_picks}</b></div>
+      <div><span class="muted">made</span> <b>${done}</b></div>
+      ${p.my_turn ? `<b style="color:var(--good)">YOUR TURN — click DRAFT above</b>`
+        : `<span class="muted">simulated managers picking…</span>`}
+    </div>
+    ${p.over ? `<div class="alert info">Practice draft finished. Check your
+       roster panel, then end practice.</div>` : ""}
+    <button onclick="stopPractice()"
+            style="background:#4a1f1f;border-color:var(--bad)">
+      End practice — back to my live draft</button>`;
+}
+
+async function startPractice() {
+  const slot = $("pracSlot") ? $("pracSlot").value : "";
+  const speed = $("pracSpeed") ? $("pracSpeed").value : "";
+  const out = await post("/api/practice/start",
+                         {slot: slot || null, speed: speed || null});
+  if (out && out.ok === false) alert(out.error || "could not start");
+  poll();
+}
+
+async function stopPractice() {
+  const out = await post("/api/practice/stop", {});
+  if (out && out.ok === false) alert(out.error || "could not stop");
+  poll();
 }
 
 function renderSim(s) {

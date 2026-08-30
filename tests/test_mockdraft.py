@@ -536,7 +536,50 @@ class MockDraftTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("turn", result["detail"])
 
-    def test_15_http_layer_serves_state_and_page(self):
+    def test_15_practice_can_be_driven_entirely_from_the_browser(self):
+        """No terminal during the draft: start and stop practice from the page."""
+        self.server.picks = []
+        self.server.draft_order = {fake_sleeper.USER_ID: self.MY_SLOT}
+        self.server.status = "drafting"
+        assistant = self._assistant()
+
+        self.assertFalse(assistant.snapshot["practice"]["active"])
+        live_draft_id = assistant.snapshot["league"]["draft_id"]
+
+        started = assistant.start_practice(slot=9, speed=0.0)
+        self.assertTrue(started["ok"], started)
+        self.assertEqual(started["slot"], 9)
+        self.assertTrue(assistant.snapshot["practice"]["active"])
+        self.assertEqual(assistant.snapshot["me"]["slot"], 9)
+
+        # Starting twice must not silently create a second draft.
+        self.assertFalse(assistant.start_practice()["ok"])
+
+        for _ in range(600):
+            assistant.poll_once()
+            assistant.recompute()
+            snap = assistant.snapshot
+            if snap["practice"]["over"]:
+                break
+            if snap["practice"]["my_turn"]:
+                assistant.practice_draft(
+                    snap["recommendation"]["top"]["player"]["player_id"])
+        self.assertEqual(assistant.snapshot["draft"]["picks_made"], 180)
+        self.assertEqual(len(assistant.snapshot["roster_players"]), 15)
+
+        stopped = assistant.stop_practice()
+        self.assertTrue(stopped["ok"], stopped)
+        snap = assistant.snapshot
+        self.assertFalse(snap["practice"]["active"])
+        self.assertEqual(snap["league"]["draft_id"], live_draft_id,
+                         "did not return to the real draft")
+        self.assertEqual(snap["draft"]["picks_made"], 0,
+                         "practice picks leaked into the live draft")
+        self.assertFalse(any("PRACTICE" in w for w in snap["warnings"]),
+                         "practice banner survived the switch back to live")
+        self.assertFalse(assistant.stop_practice()["ok"])
+
+    def test_16_http_layer_serves_state_and_page(self):
         import http.client
         import threading
         from http.server import ThreadingHTTPServer

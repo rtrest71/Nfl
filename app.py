@@ -707,6 +707,48 @@ class Assistant:
         return {"ok": True, "started": True, "runs": runs,
                 "candidates": len(player_ids)}
 
+    def start_practice(self, slot=None, speed=None):
+        """Begin a practice draft from the browser - no terminal needed."""
+        with self.lock:
+            if self.practice:
+                return {"ok": False, "error": "A practice draft is already running."}
+            if not self.board:
+                return {"ok": False, "error": "No player data loaded."}
+            # `is not None`, not truthiness: a speed of 0 is a valid request
+            # for "as fast as possible" and must not fall back to the default.
+            self.practice = practice_mode.PracticeDraft(
+                my_slot=int(slot) if slot else None,
+                seconds_per_pick=(float(speed) if speed is not None
+                                  else practice_mode.DEFAULT_PICK_SECONDS))
+            self.manual_taken = []
+            self.picks = []
+            self.warnings.append(
+                "PRACTICE DRAFT — you are drafting from slot %d against 11 "
+                "simulated managers. None of this is real. Press End practice "
+                "to go back to your live draft." % self.practice.my_slot)
+            self.log("practice draft started from slot %d" % self.practice.my_slot)
+        self.poll_once()
+        self.recompute()
+        return {"ok": True, "slot": self.practice.my_slot}
+
+    def stop_practice(self):
+        """End practice and go back to watching the real draft."""
+        with self.lock:
+            if not self.practice:
+                return {"ok": False, "error": "Not in practice mode."}
+            self.practice = None
+            self.picks = []
+            self.manual_taken = []
+            self.warnings = [w for w in self.warnings
+                             if not w.startswith("PRACTICE DRAFT")]
+            self.draft = None
+            self.log("practice draft ended - back to the live draft")
+        # Re-read the real league and draft from Sleeper.
+        self.resolve_league()
+        self.poll_once()
+        self.recompute()
+        return {"ok": True}
+
     def practice_draft(self, player_id):
         """Make my pick in the practice draft."""
         with self.lock:
@@ -809,6 +851,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/undo":
                 ok, detail = self.assistant.undo_manual()
                 return self._json({"ok": ok, "detail": detail})
+            if path == "/api/practice/start":
+                return self._json(self.assistant.start_practice(
+                    slot=body.get("slot"), speed=body.get("speed")))
+            if path == "/api/practice/stop":
+                return self._json(self.assistant.stop_practice())
             if path == "/api/practice/draft":
                 return self._json(
                     self.assistant.practice_draft(body.get("player_id")))
