@@ -488,8 +488,23 @@ function renderRec(s) {
     TIER BREAK — he is the last of his group. The next ${t.next_tier_size}
     ${esc(p.position)}s are about ${num(t.next_tier_drop, 0)} points worse.</div>`;
 
-  html += `<div class="why">${esc(t.reason)}</div>
-    <div class="nums">
+  html += `<div class="why">${esc(t.reason)}</div>`;
+
+  // In practice mode you draft by clicking, since there is no Sleeper app to
+  // type into. In the real draft this button is absent on purpose.
+  const prac = s.practice || {};
+  if (prac.active) {
+    html += prac.my_turn
+      ? `<button onclick="practiceDraft('${p.player_id}')"
+           style="margin-top:14px;font-size:19px;font-weight:800;padding:12px 22px;
+                  background:var(--good);color:#06210f;border:none">
+           DRAFT ${esc(p.name).toUpperCase()}</button>`
+      : `<div class="muted" style="margin-top:14px">Waiting for the other
+           managers…${prac.seconds_until_next != null
+             ? " next pick in " + Math.ceil(prac.seconds_until_next) + "s" : ""}</div>`;
+  }
+
+  html += `<div class="nums">
       <div><div class="k">Projected</div><div class="v">${num(p.points, 0)}</div></div>
       <div><div class="k">Value over replacement</div><div class="v">${num(p.vor, 1)}</div></div>
       <div><div class="k">ADP</div><div class="v">${num(p.adp, 1)}</div></div>
@@ -592,8 +607,12 @@ function renderPool(s) {
       <td style="color:${p.value_gap > 0 ? "var(--good)" : "var(--dim)"}">
         ${p.value_gap > 0 ? "+" : ""}${p.value_gap}</td>
       <td class="muted">${p.tier || "-"}</td>
-      <td>${p.drafted ? "" :
-        `<button onclick="markById('${p.player_id}')">taken</button>`}</td>
+      <td>${p.drafted ? "" : (
+        (STATE.practice && STATE.practice.active)
+          ? (STATE.practice.my_turn
+              ? `<button onclick="practiceDraft('${p.player_id}')">draft</button>`
+              : "")
+          : `<button onclick="markById('${p.player_id}')">taken</button>`)}</td>
     </tr>`).join("");
 }
 
@@ -635,6 +654,12 @@ async function sendPaste(kind) {
 }
 
 async function markById(pid) { await post("/api/mark", {player_id: pid}); poll(); }
+
+async function practiceDraft(pid) {
+  const out = await post("/api/practice/draft", {player_id: pid});
+  if (out && out.ok === false) alert(out.error || out.detail || "could not draft");
+  poll();
+}
 
 async function markTaken(mine) {
   const name = $("markName").value.trim();

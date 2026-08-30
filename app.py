@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import config
 import draftstate
+import practice as practice_mode
 import projections as paste
 import simulation
 import sleeper
@@ -32,9 +33,10 @@ class Assistant:
     """All mutable draft state, behind one lock."""
 
     def __init__(self, offline=False, slot_override=None, draft_id_override=None,
-                 rounds_override=None):
+                 rounds_override=None, practice=None):
         self.lock = threading.RLock()
         self.offline = offline
+        self.practice = practice          # a PracticeDraft, or None for the real thing
         self.slot_override = slot_override
         self.draft_id_override = draft_id_override or config.DRAFT_ID_OVERRIDE
         self.rounds_override = rounds_override or config.ROUNDS_OVERRIDE
@@ -58,8 +60,15 @@ class Assistant:
 
         self.manual_taken = []      # undo stack of manually marked players
         self.sim = {"status": "idle"}
-        self.sim_thread = None
         self.warnings = []
+        if practice:
+            # Belongs here rather than in main(): however this app is started,
+            # a practice draft must be impossible to mistake for the real one.
+            self.warnings.append(
+                "PRACTICE DRAFT — you are drafting from slot %d against 11 "
+                "simulated managers. None of this is real. Restart without "
+                "--practice for the live draft." % practice.my_slot)
+        self.sim_thread = None
         self.errors = []
         self.notes = []
         self.last_poll = None
@@ -189,6 +198,23 @@ class Assistant:
 
     def poll_once(self):
         """One poll cycle: refresh the draft object and the picks list."""
+        if self.practice:
+            # Practice mode replaces Sleeper entirely: the simulated managers
+            # pick on a timer and the picks look exactly like real ones.
+            with self.lock:
+                board = self.board or []
+            self.practice.tick(board)
+            with self.lock:
+                self.draft = self.practice.draft_object(
+                    (self.user or {}).get("user_id") or "me")
+                self.league_users = self.practice.manager_names(
+                    (self.user or {}).get("user_id") or "me", config.USERNAME)
+                self.picks = list(self.practice.picks)
+                self.last_poll = time.time()
+                self.last_poll_ok = True
+                self.poll_failures = 0
+            return
+
         if self.offline:
             return
         draft_id = (self.draft or {}).get("draft_id")
@@ -239,6 +265,8 @@ class Assistant:
     # -- derived state ----------------------------------------------------
 
     def my_slot(self):
+        if self.practice:
+            return self.practice.my_slot
         if self.slot_override:
             return int(self.slot_override)
         user_id = (self.user or {}).get("user_id")
@@ -417,6 +445,8 @@ class Assistant:
                 "opponent_needs": opp_needs,
                 "history": analysis["history"][-12:],
                 "manual_taken": self.manual_taken,
+                "practice": (self.practice.status() if self.practice
+                             else {"active": False}),
                 "simulation": dict(self.sim),
                 "errors": self.errors,
                 "notes": self.notes[-12:],
@@ -677,6 +707,21 @@ class Assistant:
         return {"ok": True, "started": True, "runs": runs,
                 "candidates": len(player_ids)}
 
+    def practice_draft(self, player_id):
+        """Make my pick in the practice draft."""
+        with self.lock:
+            if not self.practice:
+                return {"ok": False, "error": "not in practice mode"}
+            board = self.board or []
+            ok, detail = self.practice.draft(player_id, board)
+            if ok:
+                name = next((p["name"] for p in board
+                             if p["player_id"] == str(player_id)), player_id)
+                self.log("practice: you drafted %s" % name)
+        self.poll_once()
+        self.recompute()
+        return {"ok": ok, "detail": detail}
+
     def set_slot(self, slot):
         with self.lock:
             self.slot_override = int(slot) if slot else None
@@ -764,6 +809,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/undo":
                 ok, detail = self.assistant.undo_manual()
                 return self._json({"ok": ok, "detail": detail})
+            if path == "/api/practice/draft":
+                return self._json(
+                    self.assistant.practice_draft(body.get("player_id")))
             if path == "/api/simulate":
                 return self._json(self.assistant.start_simulation(
                     runs=body.get("runs", 500),
@@ -793,14 +841,34 @@ def main():
                         help="Use a specific draft if the league has several.")
     parser.add_argument("--rounds", type=int, default=None,
                         help="Force the round count if the draft object is wrong.")
+    parser.add_argument("--practice", action="store_true",
+                        help="Rehearse against 11 simulated managers. Needs no "
+                             "Sleeper draft at all.")
+    parser.add_argument("--practice-slot", type=int, default=None,
+                        help="Draft slot to rehearse from (default: random).")
+    parser.add_argument("--practice-speed", type=float, default=None,
+                        help="Seconds each simulated manager takes (default 3).")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
 
+    practice = None
+    if args.practice:
+        practice = practice_mode.PracticeDraft(
+            my_slot=args.practice_slot,
+            seconds_per_pick=args.practice_speed
+            or practice_mode.DEFAULT_PICK_SECONDS)
+
     assistant = Assistant(offline=args.offline, slot_override=args.slot,
                           draft_id_override=args.draft_id,
-                          rounds_override=args.rounds)
+                          rounds_override=args.rounds,
+                          practice=practice)
     assistant.load_cached_data()
-    assistant.resolve_league()
+    if practice:
+        # Still resolve the league, because the live scoring settings are what
+        # make the rehearsal a rehearsal rather than a different game.
+        assistant.resolve_league()
+    else:
+        assistant.resolve_league()
     assistant.poll_once()
     assistant.recompute()
 
@@ -831,7 +899,12 @@ def main():
 
     url = "http://localhost:%d" % port
     print("\n" + "=" * 62)
-    print("  SLEEPER DRAFT ASSISTANT IS RUNNING")
+    if practice:
+        print("  PRACTICE DRAFT — REHEARSAL ONLY, NOTHING IS REAL")
+        print("  You are slot %d of %d. Click DRAFT HIM to make your pick."
+              % (practice.my_slot, config.TEAMS))
+    else:
+        print("  SLEEPER DRAFT ASSISTANT IS RUNNING")
     print("  %s" % url)
     print("=" * 62)
     print("  players=%d projections=%d adp=%d"

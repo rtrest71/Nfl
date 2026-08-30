@@ -470,7 +470,73 @@ class MockDraftTest(unittest.TestCase):
         real = [d for d in drafts if not sleeper.draft_is_mock(d, league_ids)]
         self.assertEqual(real[0]["draft_id"], fake_sleeper.DRAFT_ID)
 
-    def test_13_http_layer_serves_state_and_page(self):
+    def test_13_practice_mode_runs_a_whole_draft(self):
+        """Rehearsal must not depend on Sleeper's mock lobby being reachable."""
+        import app
+        import practice as practice_mode
+
+        prac = practice_mode.PracticeDraft(
+            my_slot=5, seconds_per_pick=0.0, seed=3)
+        assistant = app.Assistant(practice=prac)
+        assistant.load_cached_data()
+        assistant.resolve_league()
+        assistant.poll_once()
+        assistant.recompute()
+
+        self.assertTrue(assistant.snapshot["practice"]["active"])
+        self.assertEqual(assistant.snapshot["me"]["slot"], 5)
+        self.assertTrue(any("PRACTICE" in w.upper()
+                            for w in assistant.snapshot["warnings"]),
+                        "practice mode must be impossible to mistake for real")
+
+        my_rounds = []
+        for _ in range(600):
+            assistant.poll_once()
+            assistant.recompute()
+            snap = assistant.snapshot
+            if snap["practice"]["over"]:
+                break
+            if snap["practice"]["my_turn"]:
+                top = snap["recommendation"]["top"]
+                self.assertIsNotNone(top, "no recommendation on my practice turn")
+                result = assistant.practice_draft(top["player"]["player_id"])
+                self.assertTrue(result["ok"], result)
+                my_rounds.append((snap["draft"]["round"],
+                                  top["player"]["position"]))
+
+        snap = assistant.snapshot
+        self.assertEqual(snap["draft"]["picks_made"], 180)
+        self.assertEqual(len(snap["roster_players"]), 15)
+        empty = [s["slot"] for s in snap["roster"]["slots"]
+                 if not s["filled"] and s["slot"] != "BN"]
+        self.assertFalse(empty, "practice draft left starting slots empty: %s" % empty)
+
+        # The league rules must hold in rehearsal exactly as they do live.
+        for round_no, position in my_rounds:
+            if position == "QB":
+                self.assertGreaterEqual(round_no, config.QB_UNLOCK_ROUND)
+            if position in ("K", "DEF"):
+                self.assertGreaterEqual(round_no, config.K_UNLOCK_ROUND)
+
+    def test_14_practice_rejects_drafting_out_of_turn(self):
+        import app
+        import practice as practice_mode
+
+        prac = practice_mode.PracticeDraft(
+            my_slot=12, seconds_per_pick=999, seed=1)
+        assistant = app.Assistant(practice=prac)
+        assistant.load_cached_data()
+        assistant.resolve_league()
+        assistant.poll_once()
+        assistant.recompute()
+
+        # Slot 12 does not pick first, so this must be refused.
+        target = assistant.snapshot["pool"][0]["player_id"]
+        result = assistant.practice_draft(target)
+        self.assertFalse(result["ok"])
+        self.assertIn("turn", result["detail"])
+
+    def test_15_http_layer_serves_state_and_page(self):
         import http.client
         import threading
         from http.server import ThreadingHTTPServer
