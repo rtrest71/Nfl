@@ -411,6 +411,15 @@ def eligible(player, state):
     if player["player_id"] in state["taken"]:
         return False, "already drafted"
 
+    # When every remaining pick has to fill an empty starting slot, the
+    # "wait until round N" gates have to yield - otherwise a kicker you are
+    # required to draft stays blocked and nothing at all is eligible, which is
+    # exactly the deadlock that leaves the card blank.
+    must_fill_now = state["picks_left"] <= required_slots_remaining(state["needs"])
+    fills_a_need = state["needs"].get(pos, 0) > 0 or (
+        pos in config.FLEX_ELIGIBLE and state["needs"].get("FLEX", 0) > 0)
+    forced = must_fill_now and fills_a_need
+
     if pos == "QB":
         if state["needs"].get("QB", 0) <= 0:
             return False, "you already have your starting quarterback"
@@ -427,16 +436,16 @@ def eligible(player, state):
                                % config.QB_UNLOCK_ROUND)
 
     if pos == "K":
-        if rnd < config.K_UNLOCK_ROUND:
-            return False, "kickers go in round %d" % config.K_UNLOCK_ROUND
         if state["needs"].get("K", 0) <= 0:
             return False, "you already have a kicker"
+        if rnd < config.K_UNLOCK_ROUND and not forced:
+            return False, "kickers go in round %d" % config.K_UNLOCK_ROUND
 
     if pos == "DEF":
-        if rnd < config.DEF_UNLOCK_ROUND:
-            return False, "defenses go in round %d" % config.DEF_UNLOCK_ROUND
         if state["needs"].get("DEF", 0) <= 0:
             return False, "you already have a defense"
+        if rnd < config.DEF_UNLOCK_ROUND and not forced:
+            return False, "defenses go in round %d" % config.DEF_UNLOCK_ROUND
 
     # No IR and 5 bench spots: no room for handcuff backups until the very end.
     # The one exception is the backup to a back you already own - that is not a
@@ -449,13 +458,8 @@ def eligible(player, state):
 
     # Roster completion: if I have exactly as many picks left as empty starting
     # slots, every remaining pick must fill one.
-    picks_left = state["picks_left"]
-    must_fill = required_slots_remaining(state["needs"])
-    if picks_left <= must_fill:
-        fills = state["needs"].get(pos, 0) > 0 or (
-            pos in config.FLEX_ELIGIBLE and state["needs"].get("FLEX", 0) > 0)
-        if not fills:
-            return False, "you must fill empty starting slots with your last picks"
+    if must_fill_now and not fills_a_need:
+        return False, "you must fill empty starting slots with your last picks"
 
     # Do not stack a position far beyond what can start.
     have = sum(1 for p in state["my_roster"] if p == pos)

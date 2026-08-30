@@ -21,9 +21,9 @@ DRAFT_TYPE = "snake"
 # Roster: 15 total. Not superflex - one QB only.
 # ---------------------------------------------------------------------------
 STARTERS = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1}
-FLEX_SLOTS = 2
+FLEX_SLOTS = 1
 FLEX_ELIGIBLE = ("RB", "WR", "TE")
-BENCH = 4
+BENCH = 5
 
 ROSTER_SIZE = sum(STARTERS.values()) + FLEX_SLOTS + BENCH  # 15
 
