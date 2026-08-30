@@ -579,7 +579,56 @@ class MockDraftTest(unittest.TestCase):
                          "practice banner survived the switch back to live")
         self.assertFalse(assistant.stop_practice()["ok"])
 
-    def test_16_http_layer_serves_state_and_page(self):
+    def test_16_follows_any_sleeper_draft_from_the_browser(self):
+        """The real workflow: pick in Sleeper, watch it appear here.
+
+        Nothing is clicked in the web app - every pick, mine included, arrives
+        from Sleeper exactly as it will during the live draft.
+        """
+        self.server.picks = []
+        self.server.draft_order = {fake_sleeper.USER_ID: self.MY_SLOT}
+        self.server.mock_picks = []
+        self.server.mock_status = "drafting"
+        self.server.mock_draft_order = {fake_sleeper.USER_ID: 5}
+        assistant = self._assistant()
+        league_draft = assistant.snapshot["league"]["draft_id"]
+
+        # A pasted draft address, not just a bare id.
+        result = assistant.follow_draft(
+            "https://sleeper.com/draft/nfl/%s" % fake_sleeper.MOCK_DRAFT_ID)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(assistant.snapshot["league"]["draft_id"],
+                         fake_sleeper.MOCK_DRAFT_ID)
+        self.assertEqual(assistant.snapshot["me"]["slot"], 5)
+
+        ordered = sorted(self.players, key=lambda p: self.adp.get(p, 9999))
+        for pick_no in range(1, 9):
+            round_no, slot = draftstate.slot_of_pick(pick_no)
+            self.server.add_mock_pick(pick_no, round_no, slot, ordered[pick_no - 1])
+        assistant.poll_once()
+        assistant.recompute()
+
+        snap = assistant.snapshot
+        self.assertEqual(snap["draft"]["picks_made"], 8)
+        self.assertEqual(len([p for p in snap["pool"] if p["drafted"]]), 8,
+                         "picks made in Sleeper did not leave the pool")
+        # Slot 5 picked at 5; that player must be on my roster without any
+        # clicking in the web app.
+        self.assertEqual([p["player_id"] for p in snap["roster_players"]],
+                         [ordered[4]])
+
+        back = assistant.follow_draft(None)
+        self.assertTrue(back["ok"])
+        self.assertEqual(assistant.snapshot["league"]["draft_id"], league_draft)
+        self.assertEqual(assistant.snapshot["draft"]["picks_made"], 0)
+
+    def test_17_rejects_a_draft_id_sleeper_does_not_have(self):
+        assistant = self._assistant()
+        result = assistant.follow_draft("999999999999")
+        self.assertFalse(result["ok"])
+        self.assertIn("999999999999", result["error"])
+
+    def test_18_http_layer_serves_state_and_page(self):
         import http.client
         import threading
         from http.server import ThreadingHTTPServer

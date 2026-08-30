@@ -191,8 +191,14 @@ RUN_WINDOW = 6
 # Queue export length.
 QUEUE_LENGTH = 40
 
-# Polling interval for the live picks endpoint, in seconds.
-POLL_SECONDS = 3
+# Polling interval for the live picks endpoint, in seconds. Sleeper's published
+# limit is 1000 calls a minute; at one call a second we use 60, so there is
+# plenty of headroom and no reason to make you wait for the board to catch up.
+POLL_SECONDS = 1.0
+
+# When your turn is this close, poll harder - these are the seconds that count.
+POLL_SECONDS_NEAR_TURN = 0.6
+NEAR_TURN_PICKS = 3
 
 # Bye weeks that matter for the fantasy playoffs.
 PLAYOFF_WEEKS = (15, 16, 17)

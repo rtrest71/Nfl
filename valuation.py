@@ -612,6 +612,13 @@ def recommend(board, state, limit=5):
     top = scored[0]
     runner_up = scored[1] if len(scored) > 1 else None
 
+    # When the top options are within a point of each other the pick genuinely
+    # does not matter. Say so, rather than presenting a hair-splitting number
+    # as if it were a finding - especially since the take-now-versus-wait edge
+    # can drift slightly negative between interchangeable players.
+    gap_to_second = (top["take_now"] - runner_up["take_now"]) if runner_up else 0.0
+    close_call = bool(runner_up and gap_to_second < 1.0)
+
     for entry in scored[:limit]:
         player = entry["player"]
         tier_break = bool(player.get("tier_last") and player.get("next_tier_size"))
@@ -623,8 +630,8 @@ def recommend(board, state, limit=5):
     return {
         "top": top,
         "alternatives": scored[1:limit],
-        "delta_to_next": round(top["take_now"] - runner_up["take_now"], 2)
-        if runner_up else 0.0,
+        "delta_to_next": round(gap_to_second, 2),
+        "close_call": close_call,
         "candidates": scored[:limit],
     }
 

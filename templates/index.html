@@ -349,25 +349,42 @@ function renderPractice(s) {
   const box = $("practiceBox");
 
   if (!p.active) {
+    const following = s.league && s.league.draft_id;
     box.innerHTML = `
-      <p class="muted" style="margin:0 0 10px;font-size:12px">
-        Rehearse against 11 simulated managers. Nothing touches your real
-        league — it is purely to get used to the screen before 6pm.</p>
-      <div class="flex">
-        <button onclick="startPractice()"
-                style="background:#1c3a5e;border-color:var(--accent)">
-          Start a practice draft</button>
-        <select id="pracSlot">
-          <option value="">random slot</option>
-          ${Array.from({length: 12}, (_, i) =>
-            `<option value="${i + 1}">slot ${i + 1}</option>`).join("")}
-        </select>
-        <select id="pracSpeed">
-          <option value="3">normal</option>
-          <option value="1">fast</option>
-          <option value="0.3">very fast</option>
-        </select>
-      </div>`;
+      <p class="muted" style="margin:0 0 8px;font-size:12px">
+        <b>To rehearse the way you will actually play:</b> start a mock draft in
+        the Sleeper app, paste its draft number here, and pick in Sleeper. Every
+        pick — yours and everyone else's — appears here automatically.</p>
+      <div class="flex" style="margin-bottom:6px">
+        <input id="followId" placeholder="Sleeper draft number or link"
+               style="flex:1;min-width:170px">
+        <button onclick="followDraft()"
+                style="background:#1c3a5e;border-color:var(--accent)">Follow it</button>
+      </div>
+      <div class="muted" style="font-size:11px;margin-bottom:12px">
+        Now watching draft <span class="mono">${esc(following || "—")}</span>.
+        <a href="#" onclick="followDraft(true);return false"
+           style="color:var(--accent)">Go back to my league's draft</a>
+      </div>
+      <details>
+        <summary>Or rehearse offline against simulated managers</summary>
+        <p class="muted" style="font-size:12px;margin:8px 0">
+          No Sleeper involved — you pick by clicking here. Useful only to see
+          how the screen behaves.</p>
+        <div class="flex">
+          <button onclick="startPractice()">Start simulated draft</button>
+          <select id="pracSlot">
+            <option value="">random slot</option>
+            ${Array.from({length: 12}, (_, i) =>
+              `<option value="${i + 1}">slot ${i + 1}</option>`).join("")}
+          </select>
+          <select id="pracSpeed">
+            <option value="3">normal</option>
+            <option value="1">fast</option>
+            <option value="0.3">very fast</option>
+          </select>
+        </div>
+      </details>`;
     return;
   }
 
@@ -387,6 +404,14 @@ function renderPractice(s) {
     <button onclick="stopPractice()"
             style="background:#4a1f1f;border-color:var(--bad)">
       End practice — back to my live draft</button>`;
+}
+
+async function followDraft(reset) {
+  const box = $("followId");
+  const id = reset ? "" : (box ? box.value.trim() : "");
+  const out = await post("/api/follow", {draft_id: id});
+  if (out && out.ok === false) alert(out.error || "could not follow that draft");
+  poll();
 }
 
 async function startPractice() {
@@ -576,8 +601,18 @@ function renderRec(s) {
       <div><div class="k">ADP</div><div class="v">${num(p.adp, 1)}</div></div>
       <div><div class="k">Survives to next pick</div>
         <div class="v">${survive === null ? "-" : survive + "%"}</div></div>
-      <div><div class="k">Edge over waiting</div><div class="v">${num(t.edge, 1)}</div></div>
+      <div><div class="k">Edge over waiting</div><div class="v">${
+        t.edge >= 1 ? "+" + num(t.edge, 1) : "even"}</div></div>
     </div></div>`;
+
+  // When the top options are within a point, say so instead of letting a
+  // hair-splitting number imply a precision that is not there.
+  if (r.close_call && r.alternatives && r.alternatives.length) {
+    html += `<div class="alert info" style="margin-top:10px">
+      Close call — ${esc(p.name)} and ${esc(r.alternatives[0].player.name)}
+      are worth almost the same here. Take either; it will not decide your
+      season.</div>`;
+  }
 
   if (r.alternatives && r.alternatives.length) {
     html += `<div class="alts"><h2 style="margin:16px 0 8px">If you disagree</h2>`;

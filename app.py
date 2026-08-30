@@ -14,6 +14,7 @@ still boots off cache/players.json and you can drive it by hand.
 import argparse
 import json
 import os
+import re
 import threading
 import time
 import traceback
@@ -260,7 +261,18 @@ class Assistant:
                 self.recompute()
             except Exception:  # noqa: BLE001 - the loop must never die
                 traceback.print_exc()
-            time.sleep(config.POLL_SECONDS)
+            time.sleep(self._poll_interval())
+
+    def _poll_interval(self):
+        """Poll harder as your turn approaches - those seconds are the ones
+        you actually feel under a two-minute clock."""
+        try:
+            until = (self.snapshot.get("me") or {}).get("picks_until_me")
+        except AttributeError:
+            until = None
+        if until is not None and until <= config.NEAR_TURN_PICKS:
+            return config.POLL_SECONDS_NEAR_TURN
+        return config.POLL_SECONDS
 
     # -- derived state ----------------------------------------------------
 
@@ -520,6 +532,7 @@ class Assistant:
             "top": entry(recommendation["top"]),
             "alternatives": [entry(a) for a in recommendation["alternatives"]],
             "delta_to_next": recommendation.get("delta_to_next", 0),
+            "close_call": recommendation.get("close_call", False),
         }
 
     def _board_grid(self, analysis, shape):
@@ -707,6 +720,43 @@ class Assistant:
         return {"ok": True, "started": True, "runs": runs,
                 "candidates": len(player_ids)}
 
+    def follow_draft(self, draft_id):
+        """Watch any Sleeper draft by id - a mock, or the real one.
+
+        This is how you rehearse the way you will actually play: pick in the
+        Sleeper app, and watch every pick appear here. Pass nothing to go back
+        to your league's own draft.
+        """
+        raw = str(draft_id or "").strip()
+        # Accept a full draft address as well as a bare id.
+        match = re.search(r"(\d{6,})", raw)
+        draft_id = match.group(1) if match else None
+
+        with self.lock:
+            self.practice = None
+            self.draft_id_override = draft_id
+            self.picks = []
+            self.manual_taken = []
+            self.warnings = [w for w in self.warnings
+                             if not w.startswith("PRACTICE")]
+            self.errors = []
+            self.draft = None
+
+        self.resolve_league()
+        self.poll_once()
+        self.recompute()
+
+        with self.lock:
+            current = (self.draft or {}).get("draft_id")
+            if draft_id and str(current) != str(draft_id):
+                return {"ok": False,
+                        "error": "Sleeper does not have a draft with id %s. "
+                                 "Check the number in the draft's web address."
+                                 % draft_id}
+            self.log("now following draft %s" % (current or "league default"))
+            return {"ok": True, "draft_id": current,
+                    "following_other": bool(draft_id)}
+
     def start_practice(self, slot=None, speed=None):
         """Begin a practice draft from the browser - no terminal needed."""
         with self.lock:
@@ -851,6 +901,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/undo":
                 ok, detail = self.assistant.undo_manual()
                 return self._json({"ok": ok, "detail": detail})
+            if path == "/api/follow":
+                return self._json(
+                    self.assistant.follow_draft(body.get("draft_id")))
             if path == "/api/practice/start":
                 return self._json(self.assistant.start_practice(
                     slot=body.get("slot"), speed=body.get("speed")))
