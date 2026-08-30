@@ -322,6 +322,10 @@ projections.py      paste parsing and player-name matching
 valuation.py        VOR, survival, tiers, risk, recommendations
 draftstate.py       snake pick numbering, rosters, runs, needs
 simulation.py       forward mock-draft simulation and lineup scoring
+team.py             in-season: live roster, best lineup, trade scoring
+assistant_api.py    the stable answers an outside assistant reads
+mcp_server.py       those answers as MCP tools, for an AI that can call tools
+weekly_nudge.py     the scheduled check that speaks up only when it matters
 templates/index.html   the interface
 cache/              players.json, projections.json, adp.json, league.json
 tests/              unit tests and a full simulated mock draft
@@ -337,6 +341,27 @@ The suite includes a complete simulated 12-team, 15-round snake draft driven
 through the real application code, which checks that the slot is detected, no
 quarterback goes before round 8, no kicker before round 14, and the final
 roster can field a legal lineup.
+
+---
+
+## In season
+
+Once the draft is complete the page changes by itself. No terminal, no flags.
+
+- **This week's lineup** — the best legal lineup your players can field, and
+  the exact START/BENCH changes to make in the Sleeper app.
+- **Offers waiting for you** — trades other managers have sent, read out of
+  Sleeper and scored before you open them.
+- **Trade check** — type any trade and see what it does to your lineup.
+
+To hand all of that to your own AI assistant — as tools it can call, as HTTP it
+can fetch, or as a weekly notification it doesn't have to ask for — see
+**[HOBBS.md](HOBBS.md)**.
+
+```bash
+./install_weekly_nudge.command    # once: check the team 4x a week, quietly
+python3 weekly_nudge.py --print   # or just read this week's brief now
+```
 
 ---
 

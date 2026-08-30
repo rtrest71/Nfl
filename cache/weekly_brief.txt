@@ -28,9 +28,9 @@ CHANGES THE APP RECOMMENDS (worth about 49.6 points):
   START ARI Defense              DEF   25.4
   START Zay Mitchell Jr.         K      9.3
   START Bryce Nix Jr.            TE    14.9
+  BENCH Xavier Bowers            RB    22.6
   BENCH Isaiah Burton            WR    20.1
   BENCH Deion Hyatt              WR    19.4
-  BENCH Xavier Bowers            RB    22.6
 
 TRADE OFFERS WAITING IN SLEEPER:
   TOO CLOSE TO CALL (+0.0 points to my starting lineup)

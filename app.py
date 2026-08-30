@@ -18,6 +18,7 @@ import re
 import threading
 import time
 import traceback
+import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -996,7 +997,12 @@ class Assistant:
         return "\n".join(lines)
 
     def evaluate_trade(self, give_names, get_names):
-        """Score a trade offer by what it does to my starting lineup."""
+        """Score a trade offer by what it does to my starting lineup.
+
+        The scoring itself lives in team.evaluate_offer, which is also what
+        reads offers straight out of Sleeper - so a trade you type in and a
+        trade someone sends you are judged by exactly the same rule.
+        """
         try:
             import team
             ctx = team.load_context(quiet=True)
@@ -1008,60 +1014,34 @@ class Assistant:
         owned = {p["player_id"] for p in ctx["owned"]}
 
         notes = ["Could not find '%s'" % n for n in missing_give + missing_get]
-        already = [p["name"] for p in getting if p["player_id"] in owned]
-        for name in already:
-            notes.append("You already own %s - ignored on the incoming side."
-                         % name)
-        getting = [p for p in getting if p["player_id"] not in owned]
-        giving = [p for p in giving if p["player_id"] in owned]
-
-        seen, deduped = set(), []
         for player in getting:
-            if player["player_id"] not in seen:
-                seen.add(player["player_id"])
-                deduped.append(player)
-        getting = deduped
+            if player["player_id"] in owned:
+                notes.append("You already own %s - ignored on the incoming "
+                             "side." % player["name"])
 
-        if not giving or not getting:
+        give_ids = [p["player_id"] for p in giving if p["player_id"] in owned]
+        get_ids, seen = [], set()
+        for player in getting:
+            pid = player["player_id"]
+            if pid not in owned and pid not in seen:
+                seen.add(pid)
+                get_ids.append(pid)
+
+        if not give_ids or not get_ids:
             return {"ok": False,
                     "error": "Name at least one player on each side that is "
                              "actually tradeable.", "notes": notes}
 
-        before = team.best_lineup(ctx["owned"])
-        give_ids = {p["player_id"] for p in giving}
-        after_roster = [p for p in ctx["owned"]
-                        if p["player_id"] not in give_ids] + getting
-        after = team.best_lineup(after_roster)
-        delta = round(after["total"] - before["total"], 1)
-
-        if delta >= 8:
-            verdict, tone = "ACCEPT", "good"
-        elif delta >= 3:
-            verdict, tone = "LEAN ACCEPT", "good"
-        elif delta > -3:
-            verdict, tone = "TOO CLOSE TO CALL", "even"
-        elif delta > -8:
-            verdict, tone = "LEAN REJECT", "bad"
-        else:
-            verdict, tone = "REJECT", "bad"
-
-        if len(after_roster) > config.ROSTER_SIZE:
-            notes.append("You would hold %d players for %d spots - you must "
-                         "drop %d." % (len(after_roster), config.ROSTER_SIZE,
-                                       len(after_roster) - config.ROSTER_SIZE))
-        if after["unfilled"] > before["unfilled"]:
-            notes.append("This leaves %d starting slot(s) you cannot fill."
-                         % after["unfilled"])
-
-        return {
-            "ok": True, "verdict": verdict, "tone": tone, "delta": delta,
-            "before": before["total"], "after": after["total"],
+        result = team.evaluate_offer(ctx, give_ids, get_ids)
+        result.pop("transaction_id", None)
+        result.pop("created", None)
+        result.update({
+            "ok": True,
             "week": ctx["week"], "source": ctx["projection_source"],
-            "giving": giving, "getting": getting,
-            "starters_after": after["starters"],
-            "new_ids": [p["player_id"] for p in getting],
-            "notes": notes,
-        }
+            "new_ids": [p["player_id"] for p in result["getting"]],
+            "notes": notes + (result.get("notes") or []),
+        })
+        return result
 
     def follow_draft(self, draft_id):
         """Watch any Sleeper draft by id - a mock, or the real one.
@@ -1204,6 +1184,49 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return {"text": raw.decode("utf-8", "replace")}
 
+    def _assistant_api(self, path, body):
+        """The /api/v1/* surface: stable JSON for an outside assistant.
+
+        Separate from /api/state on purpose. /api/state is whatever the page
+        needs today and will keep changing; this is a contract, so something
+        built against it does not break the next time the page does.
+        """
+        import assistant_api
+
+        query = urllib.parse.parse_qs(
+            urllib.parse.urlparse(self.path).query)
+        week = body.get("week") or (query.get("week") or [None])[0]
+        week = int(week) if week else None
+        fresh = bool(body.get("fresh")) or "fresh" in query
+
+        try:
+            if path == "/api/v1/lineup":
+                return self._json(assistant_api.get_lineup(week, fresh))
+            if path == "/api/v1/roster":
+                return self._json(assistant_api.get_roster(week, fresh))
+            if path == "/api/v1/offers":
+                return self._json(assistant_api.get_offers(week, fresh))
+            if path == "/api/v1/rules":
+                return self._json({"ok": True,
+                                   "rules": assistant_api.league_rules()})
+            if path == "/api/v1/brief":
+                return self._send(200, assistant_api.get_brief(week, fresh),
+                                  "text/plain; charset=utf-8")
+            if path == "/api/v1/trade":
+                give, get = body.get("give"), body.get("get")
+                if isinstance(give, str):
+                    give = [n.strip() for n in give.split(",") if n.strip()]
+                if isinstance(get, str):
+                    get = [n.strip() for n in get.split(",") if n.strip()]
+                return self._json(
+                    assistant_api.check_trade(give or [], get or [], week, fresh))
+        except assistant_api.ApiError as exc:
+            return self._json({"ok": False, "error": str(exc)}, 503)
+        return self._json({"ok": False, "error": "not found",
+                           "endpoints": ["/api/v1/lineup", "/api/v1/roster",
+                                         "/api/v1/offers", "/api/v1/rules",
+                                         "/api/v1/brief", "/api/v1/trade"]}, 404)
+
     def do_GET(self):
         path = self.path.split("?")[0]
         try:
@@ -1226,6 +1249,8 @@ class Handler(BaseHTTPRequestHandler):
                                   "text/plain; charset=utf-8")
             if path == "/api/drafts":
                 return self._json(self.assistant.list_drafts())
+            if path.startswith("/api/v1/"):
+                return self._assistant_api(path, {})
             return self._json({"error": "not found"}, 404)
         except FileNotFoundError:
             return self._json({"error": "templates/index.html is missing"}, 500)
@@ -1278,6 +1303,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.assistant.poll_once()
                 self.assistant.recompute()
                 return self._json({"ok": True})
+            if path.startswith("/api/v1/"):
+                return self._assistant_api(path, body)
             return self._json({"error": "not found"}, 404)
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
