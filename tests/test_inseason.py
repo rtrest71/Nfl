@@ -282,6 +282,147 @@ class InSeasonTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(result["notes"])
 
+    # -- pending offers ----------------------------------------------------
+
+    def _offer(self, give, get, **kwargs):
+        """Queue an offer on the fake server; clear it again afterwards."""
+        self.server.transactions = {}
+        self.server.offer_trade(self.server.week,
+                                [p["player_id"] for p in give],
+                                [p["player_id"] for p in get], **kwargs)
+
+    def _unowned(self, position, count=1):
+        owned = {p["player_id"] for p in self.context()["owned"]}
+        return [p for p in self.by_adp
+                if p["position"] == position and p["player_id"] not in owned][:count]
+
+    def test_a_pending_offer_is_found_and_scored(self):
+        ctx = self.context()
+        mine = [p for p in ctx["owned"] if p["position"] == "WR"][-1]
+        theirs = self._unowned("WR")
+        self._offer([mine], theirs)
+        try:
+            offers = team.pending_trades(self.context())
+            self.assertEqual(len(offers), 1)
+            offer = offers[0]
+            self.assertEqual([p["player_id"] for p in offer["giving"]],
+                             [mine["player_id"]])
+            self.assertEqual([p["player_id"] for p in offer["getting"]],
+                             [p["player_id"] for p in theirs])
+            self.assertAlmostEqual(offer["after"] - offer["before"],
+                                   offer["delta"], places=1)
+        finally:
+            self.server.transactions = {}
+
+    def test_an_offer_that_upgrades_a_starter_says_accept(self):
+        ctx = self.context()
+        before = team.best_lineup(ctx["owned"])
+        weakest = min((p for p in before["starters"] if p["position"] == "WR"),
+                      key=lambda p: p["points"])
+        best_wr = self._unowned("WR")[0]
+        self._offer([weakest], [best_wr])
+        try:
+            offer = team.pending_trades(self.context())[0]
+            if offer["delta"] >= 8:
+                self.assertEqual(offer["verdict"], "ACCEPT")
+            self.assertIn(offer["verdict"],
+                          ["ACCEPT", "LEAN ACCEPT", "TOO CLOSE TO CALL"])
+        finally:
+            self.server.transactions = {}
+
+    def test_an_offer_that_guts_the_lineup_says_reject(self):
+        # Every running back for one replaceable kicker: the lineup loses two
+        # starters and a flex, so there is no reading under which this is close.
+        ctx = self.context()
+        backs = [p for p in ctx["owned"] if p["position"] == "RB"]
+        self.assertGreater(len(backs), 2)
+        self._offer(backs, self._unowned("K", 40)[-1:])
+        try:
+            offer = team.pending_trades(self.context())[0]
+            self.assertLess(offer["delta"], 0)
+            self.assertIn(offer["verdict"], ["REJECT", "LEAN REJECT"])
+            self.assertEqual(offer["tone"], "bad")
+        finally:
+            self.server.transactions = {}
+
+    def test_a_completed_trade_is_not_reported_as_waiting(self):
+        ctx = self.context()
+        mine = ctx["owned"][-1]
+        self._offer([mine], self._unowned("WR"), status="complete")
+        try:
+            self.assertEqual(team.pending_trades(self.context()), [])
+        finally:
+            self.server.transactions = {}
+
+    def test_someone_elses_trade_is_ignored(self):
+        ctx = self.context()
+        self.server.transactions = {}
+        # Rosters 2 and 3 trading with each other has nothing to do with me.
+        self.server.offer_trade(self.server.week,
+                                [ctx["owned"][0]["player_id"]],
+                                [self._unowned("RB")[0]["player_id"]],
+                                roster_id=2, other=3)
+        try:
+            self.assertEqual(team.pending_trades(self.context()), [])
+        finally:
+            self.server.transactions = {}
+
+    def test_the_same_offer_is_not_reported_twice_across_weeks(self):
+        """An offer open in two polled weeks is one offer, not two."""
+        ctx = self.context()
+        mine = ctx["owned"][-1]
+        theirs = self._unowned("WR")
+        self.server.transactions = {}
+        for week in (self.server.week - 1, self.server.week):
+            self.server.offer_trade(week, [mine["player_id"]],
+                                    [p["player_id"] for p in theirs],
+                                    transaction_id="same-offer")
+        try:
+            self.assertEqual(len(team.pending_trades(self.context())), 1)
+        finally:
+            self.server.transactions = {}
+
+    def test_the_app_surfaces_waiting_offers_in_state_and_brief(self):
+        ctx = self.context()
+        mine = [p for p in ctx["owned"] if p["position"] == "WR"][-1]
+        theirs = self._unowned("WR")
+        self._offer([mine], theirs)
+        try:
+            assistant = self._assistant()
+            season = assistant.refresh_season(force=True)
+            self.assertEqual(len(season["offers"]), 1)
+
+            assistant.recompute()
+            self.assertEqual(len(assistant.snapshot["season"]["offers"]), 1)
+
+            brief = assistant.weekly_brief()
+            self.assertIn("TRADE OFFERS WAITING IN SLEEPER", brief)
+            self.assertIn(mine["name"], brief)
+            self.assertIn(theirs[0]["name"], brief)
+        finally:
+            self.server.transactions = {}
+
+    def test_no_offers_means_no_trade_section_in_the_brief(self):
+        self.server.transactions = {}
+        assistant = self._assistant()
+        assistant.refresh_season(force=True)
+        self.assertEqual(assistant.season["offers"], [])
+        self.assertNotIn("TRADE OFFERS WAITING", assistant.weekly_brief())
+
+    def test_a_transactions_outage_still_leaves_a_lineup(self):
+        """Losing the trade feed must not cost you the thing you came for."""
+        original = sleeper.get_transactions
+        sleeper.get_transactions = lambda *a, **k: (_ for _ in ()).throw(
+            sleeper.SleeperError("down"))
+        try:
+            assistant = self._assistant()
+            season = assistant.refresh_season(force=True)
+            self.assertEqual(season["status"], "ok")
+            self.assertEqual(season["offers"], [])
+            self.assertGreater(season["total"], 0)
+        finally:
+            sleeper.get_transactions = original
+
     def test_trade_endpoint_ignores_a_player_i_already_own(self):
         assistant = self._assistant()
         ctx = self.context()

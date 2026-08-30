@@ -221,6 +221,103 @@ def _label_slots(chosen):
     return labelled
 
 
+def pending_trades(context):
+    """Trade offers sitting in your Sleeper inbox, already evaluated.
+
+    Sleeper reports a proposed trade as a transaction with status "pending",
+    so an offer can be read and scored before you have looked at it. `adds`
+    maps a player onto the roster receiving him, `drops` onto the roster
+    losing him - so both sides of my half of the deal are right there.
+    """
+    league = context["league"]
+    roster_id = (context["roster"] or {}).get("roster_id")
+    if not roster_id:
+        return []
+
+    week = context["week"]
+    seen, offers = set(), []
+    # A trade proposed late in one week can still be open in the next, so look
+    # at this week and the one before it.
+    for probe in {max(1, week - 1), week}:
+        try:
+            transactions = sleeper.get_transactions(league["league_id"], probe) or []
+        except sleeper.SleeperError:
+            continue
+        for txn in transactions:
+            if txn.get("type") != "trade":
+                continue
+            if str(txn.get("status") or "").lower() != "pending":
+                continue
+            txn_id = str(txn.get("transaction_id") or "")
+            if txn_id in seen:
+                continue
+            if roster_id not in (txn.get("roster_ids") or []):
+                continue
+            seen.add(txn_id)
+
+            adds = txn.get("adds") or {}
+            drops = txn.get("drops") or {}
+            incoming = [str(p) for p, rid in adds.items() if rid == roster_id]
+            outgoing = [str(p) for p, rid in drops.items() if rid == roster_id]
+            if not incoming and not outgoing:
+                continue
+
+            offers.append(evaluate_offer(context, outgoing, incoming, txn))
+    offers.sort(key=lambda o: o.get("delta", 0), reverse=True)
+    return offers
+
+
+def evaluate_offer(context, give_ids, get_ids, txn=None):
+    """Score one trade by what it does to the starting lineup."""
+    owned = {p["player_id"]: p for p in context["owned"]}
+    giving = [owned[p] for p in give_ids if p in owned]
+    getting = []
+    for pid in get_ids:
+        if pid in owned:
+            continue
+        player = context["players"].get(pid)
+        if player:
+            getting.append(_score(player, context["projections"],
+                                  context["scoring"]))
+
+    before = best_lineup(context["owned"])
+    give_set = set(give_ids)
+    after_roster = [p for p in context["owned"]
+                    if p["player_id"] not in give_set] + getting
+    after = best_lineup(after_roster)
+    delta = round(after["total"] - before["total"], 1)
+
+    if delta >= 8:
+        verdict, tone = "ACCEPT", "good"
+    elif delta >= 3:
+        verdict, tone = "LEAN ACCEPT", "good"
+    elif delta > -3:
+        verdict, tone = "TOO CLOSE TO CALL", "even"
+    elif delta > -8:
+        verdict, tone = "LEAN REJECT", "bad"
+    else:
+        verdict, tone = "REJECT", "bad"
+
+    notes = []
+    if len(after_roster) > config.ROSTER_SIZE:
+        notes.append("You would hold %d players for %d spots - you must drop %d."
+                     % (len(after_roster), config.ROSTER_SIZE,
+                        len(after_roster) - config.ROSTER_SIZE))
+    if after["unfilled"] > before["unfilled"]:
+        notes.append("This leaves %d starting slot(s) you cannot fill."
+                     % after["unfilled"])
+
+    return {
+        "transaction_id": str((txn or {}).get("transaction_id") or ""),
+        "created": (txn or {}).get("created"),
+        "verdict": verdict, "tone": tone, "delta": delta,
+        "before": before["total"], "after": after["total"],
+        "giving": giving, "getting": getting,
+        "starters_after": after["starters"],
+        "notes": notes,
+    }
+
+
 def resolve_names(names, context):
     """Turn typed names into scored player records. Returns (found, missing)."""
     found, missing = [], []

@@ -166,6 +166,7 @@ class FakeSleeper:
         self.my_players = []
         self.my_starters = []
         self.weekly = {}          # player_id -> per-week stat line
+        self.transactions = {}    # week -> list of transaction objects
 
         outer = self
 
@@ -272,6 +273,9 @@ class FakeSleeper:
                     out.append({"roster_id": i, "owner_id": "user%d" % i,
                                 "players": [], "starters": []})
                 return out
+            if path.startswith("/v1/league/%s/transactions/" % LEAGUE_ID):
+                week = path.rsplit("/", 1)[-1]
+                return list(self.transactions.get(str(week), []))
             if path == "/v1/user/%s/drafts/nfl/2026" % USER_ID:
                 # The league draft plus a standalone mock, exactly as Sleeper
                 # reports them: a mock carries no league_id.
@@ -287,6 +291,28 @@ class FakeSleeper:
             if path == "/v1/players/nfl":
                 return self.players
         return None
+
+    def offer_trade(self, week, give_ids, get_ids, roster_id=1, other=2,
+                    status="pending", transaction_id=None):
+        """Queue a trade offer the way Sleeper reports one.
+
+        `adds` maps a player onto the roster that would receive him, `drops`
+        onto the roster that would lose him - so my half of the deal is
+        everything keyed to my roster_id.
+        """
+        adds = {str(p): other for p in give_ids}
+        adds.update({str(p): roster_id for p in get_ids})
+        drops = {str(p): roster_id for p in give_ids}
+        drops.update({str(p): other for p in get_ids})
+        with self.lock:
+            self.transactions.setdefault(str(week), []).append({
+                "transaction_id": transaction_id or ("txn%d" % (
+                    sum(len(v) for v in self.transactions.values()) + 1)),
+                "type": "trade", "status": status,
+                "roster_ids": [roster_id, other],
+                "adds": adds, "drops": drops,
+                "created": 1700000000000,
+            })
 
     def add_pick(self, pick_no, round_no, slot, player_id, user_id=None):
         with self.lock:

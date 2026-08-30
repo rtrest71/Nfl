@@ -149,6 +149,13 @@
         </div>
       </div>
       <div class="col" style="flex:1;min-width:340px">
+        <div class="panel" id="offersPanel" style="display:none">
+          <h2>Offers waiting for you</h2>
+          <p class="muted" style="margin:0 0 9px;font-size:12px">
+            Trades other managers have sent you in Sleeper, already scored.
+            Accept or reject them in the Sleeper app — this only tells you which.</p>
+          <div id="offersBox"></div>
+        </div>
         <div class="panel">
           <h2>Trade check</h2>
           <p class="muted" style="margin:0 0 9px;font-size:12px">
@@ -389,9 +396,11 @@ function renderSeason(s) {
   // snapped the Bench section shut the instant you opened it.
   const sea0 = s.season || {};
   const stamp = [sea0.status, sea0.checked_at, sea0.total,
-                 (sea0.changes || []).length].join("|");
+                 (sea0.changes || []).length,
+                 (sea0.offers || []).map(o => o.transaction_id).join(",")].join("|");
   if (stamp === LINEUP_STAMP) return;
   LINEUP_STAMP = stamp;
+  renderOffers(sea0.offers || []);
 
   // The draft is over, so the draft-day furniture is just noise now.
   ["rec", "grid", "pool"].forEach(id => {
@@ -468,6 +477,32 @@ function renderSeason(s) {
       `</tbody></table></details>`;
   }
   box.innerHTML = html;
+}
+
+function renderOffers(offers) {
+  const panel = $("offersPanel"), box = $("offersBox");
+  if (!offers.length) { panel.style.display = "none"; return; }
+  panel.style.display = "";
+
+  const names = list => (list || []).length
+    ? list.map(p => `<b>${esc(p.name)}</b> ${posTag(p.position)}
+        <span class="muted">${num(p.points, 1)}</span>`).join(" · ")
+    : `<span class="muted">nothing</span>`;
+
+  box.innerHTML = offers.map(o => {
+    const cls = o.tone === "good" ? "good" : (o.tone === "bad" ? "bad" : "info");
+    return `<div class="alert ${cls}" style="margin-bottom:10px">
+      <div style="font-size:15px;font-weight:700">${esc(o.verdict)}
+        <span style="font-weight:400">
+          — ${o.delta >= 0 ? "+" : ""}${num(o.delta, 1)} points to your
+          starting lineup</span></div>
+      <div style="margin-top:7px"><span class="muted">you send:</span>
+        ${names(o.giving)}</div>
+      <div><span class="muted">you get:</span> ${names(o.getting)}</div>
+      ${(o.notes || []).map(n => `<div class="muted"
+          style="margin-top:5px">${esc(n)}</div>`).join("")}
+    </div>`;
+  }).join("");
 }
 
 async function refreshLineup() {

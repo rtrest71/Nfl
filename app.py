@@ -853,6 +853,14 @@ class Assistant:
                 held = [by_id[p] for p in current if p in by_id]
                 gain = round(best["total"] - simulation.optimal_lineup(held)[0], 1)
 
+            # Offers waiting in your Sleeper inbox, scored before you open it.
+            # A failure here must not cost you the lineup, which is the part
+            # you actually need on a Sunday morning.
+            try:
+                offers = team.pending_trades(ctx)
+            except Exception:  # noqa: BLE001
+                offers = []
+
             season = {
                 "status": "ok",
                 "week": ctx["week"],
@@ -864,6 +872,7 @@ class Assistant:
                 "unavailable": [{"reason": r, **p} for p, r in best["unavailable"]],
                 "changes": changes,
                 "gain": gain,
+                "offers": offers,
                 "checked_at": now,
             }
         except Exception as exc:  # noqa: BLE001 - never break the page
@@ -944,6 +953,26 @@ class Assistant:
         else:
             lines.append("")
             lines.append("My Sleeper lineup already matches this.")
+
+        offers = season.get("offers") or []
+        if offers:
+            lines.append("")
+            lines.append("TRADE OFFERS WAITING IN SLEEPER:")
+            for offer in offers:
+                lines.append("  %s (%+.1f points to my starting lineup)"
+                             % (offer.get("verdict"), offer.get("delta") or 0))
+                lines.append("    I give:  %s"
+                             % (", ".join("%s (%s, %.1f)"
+                                          % (p["name"], p["position"], p["points"])
+                                          for p in offer.get("giving") or [])
+                                or "nothing"))
+                lines.append("    I get:   %s"
+                             % (", ".join("%s (%s, %.1f)"
+                                          % (p["name"], p["position"], p["points"])
+                                          for p in offer.get("getting") or [])
+                                or "nothing"))
+                for note in offer.get("notes") or []:
+                    lines.append("    NOTE: %s" % note)
 
         unavailable = season.get("unavailable") or []
         if unavailable:

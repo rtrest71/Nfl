@@ -25,12 +25,17 @@ BENCH:
   Bijan Nabers             TE  ATL    14.4
 
 CHANGES THE APP RECOMMENDS (worth about 49.6 points):
-  START Bryce Nix Jr.            TE    14.9
   START ARI Defense              DEF   25.4
   START Zay Mitchell Jr.         K      9.3
-  BENCH Deion Hyatt              WR    19.4
+  START Bryce Nix Jr.            TE    14.9
   BENCH Isaiah Burton            WR    20.1
+  BENCH Deion Hyatt              WR    19.4
   BENCH Xavier Bowers            RB    22.6
+
+TRADE OFFERS WAITING IN SLEEPER:
+  TOO CLOSE TO CALL (+0.0 points to my starting lineup)
+    I give:  Deion Hyatt (WR, 19.4)
+    I get:   Zay Achane (WR, 19.2)
 
 These projections are computed from raw projected stats using the exact scoring above, not a generic PPR column.
 
