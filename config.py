@@ -14,7 +14,7 @@ SEASON = "2026"
 SPORT = "nfl"
 
 TEAMS = 12
-ROUNDS = 15
+ROUNDS = 14
 DRAFT_TYPE = "snake"
 
 # ---------------------------------------------------------------------------
@@ -23,7 +23,7 @@ DRAFT_TYPE = "snake"
 STARTERS = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1}
 FLEX_SLOTS = 2
 FLEX_ELIGIBLE = ("RB", "WR", "TE")
-BENCH = 5
+BENCH = 4
 
 ROSTER_SIZE = sum(STARTERS.values()) + FLEX_SLOTS + BENCH  # 15
 
@@ -153,7 +153,7 @@ QB_ELITE_ADP_FALL = 12       # his ADP and still carries this much VOR.
 # lifts once the startable supply gets thin, whatever the round.
 QB_SCARCITY_UNLOCK = 5       # startable QBs left on the board
 K_UNLOCK_ROUND = 14
-DEF_UNLOCK_ROUND = 14
+DEF_UNLOCK_ROUND = 13
 
 # Injury penalty, in projected points, by Sleeper injury_status. No IR slots and
 # only 5 bench spots means an injured player burns a roster spot for nothing.
