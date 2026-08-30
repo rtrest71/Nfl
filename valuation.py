@@ -608,6 +608,9 @@ def recommend(board, state, limit=5):
         ok, reason = eligible(player, state)
         if ok:
             candidates.append(player)
+            # Clear it: a player blocked in round 3 is not blocked in round 8,
+            # and a stale reason on the board would say otherwise.
+            player.pop("blocked_reason", None)
         else:
             player["blocked_reason"] = reason
 

@@ -166,6 +166,8 @@
 
       <div class="panel">
         <h2>Draft board — all <span id="teamCount">12</span> teams</h2>
+        <div id="gridNote" class="muted"
+             style="font-size:12px;margin:-4px 0 11px;line-height:1.55"></div>
         <div class="grid" id="grid"></div>
       </div>
 
@@ -712,6 +714,21 @@ function renderQueue(s) {
 function renderGrid(s) {
   const g = s.board_grid || [];
   $("teamCount").textContent = g.length;
+
+  // Before Sleeper publishes the order there is no way to map a manager to a
+  // slot, so the columns can only say "Team 4". Show who is in the league so
+  // it is clear the names are known, not missing.
+  const note = $("gridNote");
+  if (!s.order_published && (s.league_managers || []).length) {
+    note.innerHTML = `<b>${s.league_managers.length} managers in your league:</b>
+      ${s.league_managers.map(esc).join(" · ")}<br>
+      Real names replace "Team 1…12" the moment Sleeper publishes the draft
+      order at kickoff. Nothing for you to enter.`;
+    note.style.display = "";
+  } else {
+    note.style.display = "none";
+  }
+
   const el = $("grid");
   el.style.setProperty("--cols", g.length || 12);
   el.innerHTML = g.map(t => `
@@ -744,7 +761,12 @@ function renderPool(s) {
     <tr class="${p.drafted ? "gone" : ""}">
       <td class="muted">${i + 1}</td>
       <td><b>${esc(p.name)}</b>${p.estimated ? ' <span class="tag">EST</span>' : ""}
-        ${p.injury_status ? ' <span class="tag">' + esc(p.injury_status) + "</span>" : ""}</td>
+        ${p.injury_status ? ' <span class="tag">' + esc(p.injury_status) + "</span>" : ""}
+        ${p.avg_games_missed >= 1.5
+          ? ' <span class="tag">-' + Math.round(p.avg_games_missed) + "g</span>" : ""}
+        ${p.years_exp === 0 ? ' <span class="badge">R</span>' : ""}
+        ${!p.drafted && p.blocked_reason
+          ? `<br><span class="muted" style="font-size:11px">not yet — ${esc(p.blocked_reason)}</span>` : ""}</td>
       <td>${posTag(p.position)}</td><td class="muted">${esc(p.team || "")}</td>
       <td class="muted">${p.bye || "-"}</td>
       <td>${num(p.points, 0)}</td><td>${num(p.vor, 1)}</td>

@@ -480,6 +480,11 @@ class Assistant:
                 "pool": pool,
                 "board_grid": board_grid,
                 "opponent_needs": opp_needs,
+                # Every manager Sleeper reports for the league. Useful before
+                # the order is published, when the board can only say "Team 4".
+                "league_managers": sorted(
+                    v for v in self.league_users.values() if v),
+                "order_published": bool((self.draft or {}).get("draft_order")),
                 "history": analysis["history"][-12:],
                 "manual_taken": self.manual_taken,
                 "practice": (self.practice.status() if self.practice
@@ -532,6 +537,7 @@ class Assistant:
             "injury_status": player.get("injury_status"),
             "avg_games_missed": player.get("avg_games_missed"),
             "years_exp": player.get("years_exp"),
+            "blocked_reason": player.get("blocked_reason"),
             "estimated": player.get("estimated"),
             "drafted": player["player_id"] in taken,
         }
